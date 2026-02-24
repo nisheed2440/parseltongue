@@ -1,6 +1,0 @@
-{
-  "name": "@parseltongue/generate",
-  "version": "0.1.0",
-  "private": true,
-  "description": "Phase 3: Create new stories (chapter-by-chapter) using RAG"
-}

@@ -4,8 +4,9 @@
   "private": true,
   "description": "Phase 1: Scrape fan fiction (AO3) to Markdown + metadata",
   "type": "module",
+  "main": "index.js",
+  "exports": "./index.js",
   "scripts": {
-    "scrape": "node run.js",
     "postinstall": "playwright install chromium"
   },
   "dependencies": {

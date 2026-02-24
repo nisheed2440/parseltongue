@@ -2,5 +2,5 @@
   "name": "@parseltongue/web",
   "version": "0.1.0",
   "private": true,
-  "description": "Phase 5: Web app to browse, generate, and listen to stories"
+  "description": "Phase 4: Web app to browse and listen to stories"
 }

@@ -1,0 +1,6 @@
+{
+  "name": "@parseltongue/enunciate",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Phase 2: Voice-direct scraped chapter Markdown for natural spoken delivery"
+}

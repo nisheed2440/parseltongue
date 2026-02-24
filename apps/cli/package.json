@@ -1,0 +1,15 @@
+{
+  "name": "@parseltongue/cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pipeline CLI: scrape, enunciate, tts",
+  "type": "module",
+  "scripts": {
+    "start": "node run.js"
+  },
+  "dependencies": {
+    "@parseltongue/enunciate": "*",
+    "@parseltongue/scraper": "*",
+    "yargs": "^18.0.0"
+  }
+}

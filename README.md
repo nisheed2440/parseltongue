@@ -1,18 +1,17 @@
 # Parseltongue
 
-A Harry Potter fan fiction pipeline: scrape → embed → generate → speak → consume.
+A Harry Potter fan fiction pipeline: scrape → enunciate → speak → consume.
 
-This repo is a **Turborepo** monorepo: each phase lives in its own app or package.
+This repo is a **Turborepo** monorepo. Packages are importable libraries; apps are runnable entry points. A single CLI app (`apps/cli`) orchestrates the pipeline by calling into the packages.
 
 ## Roadmap
 
 | Phase | Goal | Location |
 |-------|------|----------|
-| **1** | Scraper | `apps/scraper` — Markdown + metadata from AO3 |
-| **2** | RAG | `packages/rag` — Vector embeddings and retrieval |
-| **3** | Generation | `packages/generate` — Chapter-by-chapter with RAG |
-| **4** | TTS | `packages/tts` — ElevenLabs: Markdown → audio |
-| **5** | Web app | `apps/web` — Browse, generate, listen |
+| **1** | Scraper | `packages/scraper` — Markdown + metadata from AO3 |
+| **2** | Enunciation | `packages/enunciate` — Voice-direct chapter Markdown for natural spoken delivery |
+| **3** | TTS | `packages/tts` — ElevenLabs: Markdown → audio |
+| **4** | Web app | `apps/web` — Browse, listen |
 
 ## Project layout
 
@@ -29,12 +28,12 @@ parseltongue/
 │               ├── 01.md
 │               └── ...
 ├── apps/
-│   ├── scraper/          # Phase 1 — Node + Playwright
-│   └── web/              # Phase 5 — TBD
+│   ├── cli/              # Pipeline CLI (subcommands: scrape, enunciate, …)
+│   └── web/              # Phase 4 — TBD
 ├── packages/
-│   ├── rag/              # Phase 2
-│   ├── generate/        # Phase 3
-│   └── tts/              # Phase 4
+│   ├── scraper/          # Phase 1 — Node + Playwright
+│   ├── enunciate/        # Phase 2
+│   └── tts/              # Phase 3
 └── tests/
 ```
 
@@ -50,13 +49,17 @@ parseltongue/
    ```bash
    npm run scrape -- 12345 67890
    ```
-   Options: `-o` / `--output` (output dir), `--delay` (seconds between stories), `--headless`. See `apps/scraper/README.md`.
+   Options: `-o` / `--output` (output dir), `--delay` (seconds between stories), `--headless`. See `packages/scraper/README.md`.
 
-**Important**: Respect the target site’s terms and rate limits. Use `--delay` to throttle (default 2s between stories, min 2s at 30 rpm).
+**Important**: Respect the target site's terms and rate limits. Use `--delay` to throttle (default 2s between stories, min 2s at 30 rpm).
+
+## CLI commands (from root)
+
+- `npm run scrape -- <id> [id ...]` — scrape AO3 stories
+- `npm run enunciate -- <id> [chapter]` — voice-direct chapter Markdown (not yet implemented)
 
 ## Turbo commands (from root)
 
 - `npm run build` — build all packages that define `build`
 - `npm run dev` — run `dev` in all apps (e.g. dev servers)
-- `npm run scrape` — run the scraper (forwards args to `apps/scraper`)
 - `npm run lint` — lint all packages

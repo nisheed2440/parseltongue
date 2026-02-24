@@ -2,5 +2,5 @@
   "name": "@parseltongue/tts",
   "version": "0.1.0",
   "private": true,
-  "description": "Phase 4: ElevenLabs TTS — chapter Markdown → audio"
+  "description": "Phase 3: ElevenLabs TTS — chapter Markdown → audio"
 }
