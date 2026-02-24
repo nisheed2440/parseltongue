@@ -7,7 +7,6 @@
   "main": "index.js",
   "exports": "./index.js",
   "dependencies": {
-    "@google/generative-ai": "^0.24.0",
     "fs-extra": "^11.2.0"
   }
 }

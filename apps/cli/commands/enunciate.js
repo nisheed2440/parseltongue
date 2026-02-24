@@ -14,7 +14,7 @@ function findRepoRoot(startDir = process.cwd()) {
 }
 
 export const command = "enunciate <storyId> [chapter]";
-export const describe = "Voice-direct chapter Markdown for spoken delivery using Gemini";
+export const describe = "Voice-direct chapter Markdown for spoken delivery using local Ollama";
 
 export function builder(yargs) {
   return yargs
@@ -34,8 +34,8 @@ export function builder(yargs) {
     .option("model", {
       alias: "m",
       type: "string",
-      default: "gemini-2.5-flash",
-      describe: "Gemini model name",
+      default: "qwen3:8b",
+      describe: "Ollama model name",
     })
     .option("force", {
       alias: "f",
@@ -72,14 +72,6 @@ function discoverChapters(storyDir) {
 
 export async function handler(argv) {
   const { storyId, chapter, output, model, force } = argv;
-
-  if (!process.env.GEMINI_API_KEY) {
-    console.error(
-      "GEMINI_API_KEY environment variable is required.\n" +
-        "Get one at https://aistudio.google.com/app/apikey"
-    );
-    process.exit(1);
-  }
 
   const root = findRepoRoot();
   const baseDir = path.resolve(output || path.join(root, "data", "stories"));
@@ -119,7 +111,7 @@ export async function handler(argv) {
     }
 
     const chapterText = fse.readFileSync(srcPath, "utf-8");
-    console.log(`  ch ${num}: sending to Gemini (${chapterText.length} chars)...`);
+    console.log(`  ch ${num}: sending to Ollama/${model} (${chapterText.length} chars)...`);
 
     try {
       const result = await enunciateChapter(chapterText, { model });
