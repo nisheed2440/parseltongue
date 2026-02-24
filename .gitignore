@@ -1,0 +1,25 @@
+# Data and secrets
+data/stories/
+*.env
+.env.*
+
+# Node
+node_modules/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs and cache
+*.log
+.cache/

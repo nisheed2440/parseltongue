@@ -1,0 +1,6 @@
+{
+  "name": "@parseltongue/rag",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Phase 2: Vector embeddings and retrieval over the story corpus"
+}

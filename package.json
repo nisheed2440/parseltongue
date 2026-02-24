@@ -1,0 +1,21 @@
+{
+  "name": "parseltongue",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Fan fiction pipeline: scrape → embed → generate → speak → consume",
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "scrape": "node apps/scraper/run.js",
+    "lint": "turbo run lint",
+    "postinstall": "npm run postinstall --workspace=@parseltongue/scraper"
+  },
+  "devDependencies": {
+    "turbo": "^2.3.0"
+  },
+  "packageManager": "npm",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ]
+}
