@@ -5,9 +5,9 @@ const ACTION_DELAY_MS = 2000;
 const CONSENT_PAUSE_MS = 1500;
 
 /**
- * Remove unwanted decorative characters and normalize whitespace in chapter text.
+ * Remove unwanted decorative characters and normalize whitespace while preserving paragraphs.
  * - Strips runs of 2+ underscores (e.g. _____ used as separators)
- * - Collapses multiple spaces to one, trims lines and whole text
+ * - Collapses spaces within each line only; keeps newlines so paragraphs stay separated
  * @param {string} text
  * @returns {string}
  */
@@ -15,16 +15,16 @@ function cleanChapterText(text) {
   if (!text || !text.trim()) return "";
   return text
     .replace(/_{2,}/g, "")
-    .replace(/\s+/g, " ")
     .split("\n")
-    .map((line) => line.trim())
+    .map((line) => line.replace(/\s+/g, " ").trim())
     .filter((line) => line.length > 0)
     .join("\n\n")
     .trim();
 }
 
 /**
- * Convert HTML snippet to plain text (minimal markdown-friendly). Excludes .landmark.heading.
+ * Convert HTML snippet to plain text (minimal markdown-friendly). Preserves paragraph breaks.
+ * Excludes .landmark.heading. Uses </p> and <p> to create double-newlines between paragraphs.
  * @param {string} html
  * @returns {string}
  */
@@ -35,9 +35,12 @@ function htmlToMarkdown(html) {
   let text = $.html();
   text = text
     .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/p>\s*<p>/gi, "\n\n")
+    .replace(/<\/p>\s*<p[^>]*>/gi, "\n\n")
+    .replace(/<\/p>/gi, "\n\n")
+    .replace(/<p[^>]*>/gi, " ")
     .replace(/<[^>]+>/g, " ")
-    .replace(/\s+/g, " ")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n\s*\n\s*\n+/g, "\n\n")
     .trim();
   text = text.replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"');
   return cleanChapterText(text);
@@ -50,63 +53,40 @@ function getText($el, defaultVal = "") {
 }
 
 /**
- * Parse work metadata from work page HTML.
- * @param {string} html
+ * Parse metadata from the view full work page HTML.
+ * Selectors: title (h2.title.heading), author (h3.byline.heading), summary (div.summary.module > blockquote),
+ * rating (dd.rating.tags > ul > li > a), category (dd.category.tags > ul > li > a), tags (dd.freeform.tags > ul > li > a).
+ * @param {string} html - full work page HTML
  * @param {string} workId
  * @param {string} workUrl
  * @returns {import('./metadata.js').StoryMeta}
  */
-function parseMetadata(html, workId, workUrl) {
+function parseMetadataFromFullWork(html, workId, workUrl) {
   const $ = cheerio.load(html);
-  let title = "Untitled";
-  let author = "Unknown";
 
-  const h4 = $("h4.heading");
-  if (h4.length) {
-    const links = h4.find("a");
-    if (links.length) {
-      title = getText($(links[0]), "Untitled");
-      if (links.length > 1) {
-        author = links
-          .slice(1)
-          .map((_, a) => getText($(a)))
-          .filter(Boolean)
-          .join(", ")
-          .trim() || "Unknown";
-      }
-    }
-  }
+  const titleEl = $("h2.title.heading").first();
+  const title = getText(titleEl, "Untitled");
 
-  if (title === "Untitled") {
-    for (const sel of ["h2.title a", "h2.title", ".work .title.heading", ".preface h2.title a"]) {
-      const el = $(sel).first();
-      if (el.length) {
-        title = getText(el, "Untitled");
-        if (title) break;
-      }
-    }
-  }
-  if (author === "Unknown") {
-    const authorLinks = $('a[rel="author"]');
-    if (authorLinks.length) {
-      author = authorLinks
-        .map((_, a) => getText($(a)))
-        .get()
-        .filter(Boolean)
-        .join(", ")
-        .trim() || "Unknown";
-    }
-    if (author === "Unknown") {
-      const byline = $("h3.byline.heading, .byline").first();
-      if (byline.length) author = getText(byline, "").replace(/^By\s+/i, "").trim() || "Unknown";
-    }
-  }
+  const bylineEl = $("h3.byline.heading").first();
+  let author = getText(bylineEl, "Unknown").replace(/^By\s+/i, "").trim() || "Unknown";
 
-  const summaryEl = $("blockquote.summary").first();
+  const summaryEl = $("div.summary.module > blockquote").first();
   const summary = summaryEl.length ? htmlToMarkdown(summaryEl.html() || "") : "";
 
+  const rating = [];
+  $("dd.rating.tags ul li a").each((_, a) => {
+    const t = getText($(a));
+    if (t && !rating.includes(t)) rating.push(t);
+  });
+
+  const category = [];
+  $("dd.category.tags ul li a").each((_, a) => {
+    const t = getText($(a));
+    if (t && !category.includes(t)) category.push(t);
+  });
+
   const tags = [];
-  $("ul.tags li a").each((_, a) => {
+  $("dd.freeform.tags ul li a").each((_, a) => {
     const t = getText($(a));
     if (t && !tags.includes(t)) tags.push(t);
   });
@@ -124,6 +104,8 @@ function parseMetadata(html, workId, workUrl) {
     author,
     summary,
     url: workUrl,
+    rating,
+    category,
     tags,
     word_count: wordCount,
     chapter_count: 0,
@@ -154,9 +136,8 @@ function parseChaptersFromFullWork(html) {
     const titleEl = block.find("h3.title").first();
     const title = getText(titleEl, "");
     if (/^\s*notes?\s*$/i.test(title)) continue;
-    const userstuff = block.find(".userstuff").first();
     const articleEl = block.find('[role="article"]').first();
-    const contentEl = userstuff.length ? userstuff : articleEl;
+    const contentEl = articleEl.length ? articleEl : block.find(".userstuff").first();
     const raw = contentEl.length ? contentEl.html() || "" : "";
     const content = htmlToMarkdown(raw);
     if (!content.trim() && !title.trim()) continue;
@@ -182,7 +163,6 @@ export async function fetchWork(workId, opts) {
   const storyDir = ensureStoryDir(outputDir, workId);
 
   const { chromium } = await import("playwright");
-  const workUrl = `${AO3_BASE}/works/${workId}?view_adult=true`;
   const fullWorkUrl = `${AO3_BASE}/works/${workId}?view_full_work=true&view_adult=true`;
 
   const browser = await chromium.launch({ headless });
@@ -190,31 +170,12 @@ export async function fetchWork(workId, opts) {
     const page = await browser.newPage();
     page.setDefaultTimeout(timeout);
 
-    await page.goto(workUrl, { waitUntil: "domcontentloaded" });
+    await page.goto(fullWorkUrl, { waitUntil: "domcontentloaded" });
     await page.waitForLoadState("networkidle", { timeout: 15_000 });
     await page.waitForTimeout(CONSENT_PAUSE_MS);
 
     const tos = page.locator("#tos_agree");
     if (await tos.isVisible()) {
-      await tos.check();
-      await page.locator("#data_processing_agree").check();
-      await page.locator("#accept_tos").click();
-      await page.waitForTimeout(ACTION_DELAY_MS);
-      await page.waitForLoadState("networkidle", { timeout: 10_000 });
-      await page.goto(workUrl, { waitUntil: "domcontentloaded" });
-      await page.waitForLoadState("networkidle", { timeout: 15_000 });
-    }
-
-    const workHtml = await page.content();
-    const meta = parseMetadata(workHtml, workId, workUrl);
-    console.log(`[work ${workId}] title=${JSON.stringify(meta.title)} author=${JSON.stringify(meta.author)} word_count=${meta.word_count} tags=${meta.tags.length} url=${meta.url}`);
-
-    await page.waitForTimeout(ACTION_DELAY_MS);
-    await page.goto(fullWorkUrl, { waitUntil: "domcontentloaded" });
-    await page.waitForLoadState("networkidle", { timeout: 15_000 });
-    await page.waitForTimeout(CONSENT_PAUSE_MS);
-
-    if (await page.locator("#tos_agree").isVisible()) {
       await tos.check();
       await page.locator("#data_processing_agree").check();
       await page.locator("#accept_tos").click();
@@ -228,10 +189,11 @@ export async function fetchWork(workId, opts) {
     await page.waitForTimeout(500);
 
     const fullWorkHtml = await page.content();
+    const meta = parseMetadataFromFullWork(fullWorkHtml, workId, fullWorkUrl);
     const chapters = parseChaptersFromFullWork(fullWorkHtml);
     meta.chapter_count = chapters.length;
     writeMeta(storyDir, meta, toYaml);
-    console.log(`[work ${workId}] full work: ${chapters.length} chapter(s), meta written`);
+    console.log(`[work ${workId}] title=${JSON.stringify(meta.title)} author=${JSON.stringify(meta.author)} rating=${meta.rating.length} category=${meta.category.length} tags=${meta.tags.length} chapters=${chapters.length} url=${meta.url}`);
 
     for (let i = 0; i < chapters.length; i++) {
       const chapterIndex = i + 1;

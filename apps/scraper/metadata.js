@@ -7,6 +7,8 @@ import yaml from "js-yaml";
  * @property {string} author
  * @property {string} [summary]
  * @property {string} [url]
+ * @property {string[]} [rating]
+ * @property {string[]} [category]
  * @property {string[]} [tags]
  * @property {number} [word_count]
  * @property {number} [chapter_count]
@@ -24,6 +26,8 @@ export function toYaml(meta) {
     author: meta.author,
     summary: meta.summary ?? "",
     url: meta.url ?? "",
+    rating: meta.rating ?? [],
+    category: meta.category ?? [],
     tags: meta.tags ?? [],
     word_count: meta.word_count ?? 0,
     chapter_count: meta.chapter_count ?? 0,
