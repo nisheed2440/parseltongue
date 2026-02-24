@@ -2,5 +2,12 @@
   "name": "@parseltongue/enunciate",
   "version": "0.1.0",
   "private": true,
-  "description": "Phase 2: Voice-direct scraped chapter Markdown for natural spoken delivery"
+  "description": "Phase 2: Voice-direct scraped chapter Markdown for natural spoken delivery",
+  "type": "module",
+  "main": "index.js",
+  "exports": "./index.js",
+  "dependencies": {
+    "@google/generative-ai": "^0.24.0",
+    "fs-extra": "^11.2.0"
+  }
 }
