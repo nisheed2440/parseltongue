@@ -1,169 +1,122 @@
 # Parseltongue
 
-A Harry Potter fan fiction pipeline: scrape → enunciate → speak → consume.
+Fan fiction pipeline: **scrape → enunciate → speak → consume**
 
-This repo is a **Turborepo** monorepo. Packages are importable libraries; apps are runnable entry points. A single CLI app (`apps/cli`) orchestrates the pipeline by calling into the packages.
+Turn AO3 stories into audio books — scrape chapters to Markdown, add AI voice direction via Qwen3 8b on Ollama, synthesize with Qwen3-TTS, and browse through a web app.
 
 ## Roadmap
 
-| Phase | Goal | Location |
-|-------|------|----------|
-| **1** | Scraper | `packages/scraper` — Markdown + metadata from AO3 |
-| **2** | Enunciation | `packages/enunciate` — Voice-direct chapter Markdown for natural spoken delivery |
-| **3** | TTS | `packages/tts` — Qwen3-TTS: enunciated Markdown → audio |
-| **4** | Web app | `apps/web` — Browse, listen |
+| Phase | Package | Status | Description |
+|-------|---------|--------|-------------|
+| 1 | `packages/scraper` | ✅ Done | Scrape AO3 stories → Markdown + `meta.yaml` |
+| 2 | `packages/director` | 🔜 Next | AI voice direction using Qwen3 8b on Ollama |
+| 3 | `packages/tts` | 🔜 Next | Text-to-speech using Qwen3-TTS |
+| 4 | `apps/web` | 🔜 Next | Web app to browse and listen to stories |
 
 ## Project layout
 
 ```
 parseltongue/
-├── README.md
-├── package.json          # Root workspace + Turbo scripts
-├── turbo.json
-├── requirements.txt      # Python deps (pip install -r requirements.txt)
-├── .venv/                # Python virtual environment (gitignored, you create this)
-├── data/                 # Scraped stories (gitignored)
-│   └── stories/
-│       └── <story_id>/
-│           ├── meta.yaml
-│           └── chapters/
-│               ├── 01.md
-│               └── ...
+├── pyproject.toml              # uv workspace root
 ├── apps/
-│   ├── cli/              # Pipeline CLI (subcommands: scrape, enunciate, speak, …)
-│   └── web/              # Phase 4 — TBD
-├── packages/
-│   ├── scraper/          # Phase 1 — Node + Playwright
-│   ├── enunciate/        # Phase 2 — Paragraph splitting + voice directions
-│   └── tts/              # Phase 3 — Qwen3-TTS (warm Gradio server or one-shot Python)
-└── tests/
+│   ├── cli/                    # Typer CLI (parseltongue command)
+│   │   └── parseltongue_cli/
+│   │       ├── main.py
+│   │       └── commands/
+│   │           └── scrape.py
+│   └── web/                    # FastAPI web app (Phase 4)
+│       └── parseltongue_web/
+│           └── main.py
+└── packages/
+    └── scraper/                # AO3 scraper (Playwright + BeautifulSoup)
+        └── parseltongue_scraper/
+            ├── ao3_adapter.py
+            ├── metadata.py
+            └── repository.py
 ```
+
+Scraped data lands in `data/stories/<work_id>/`:
+```
+data/stories/
+└── 12345/
+    ├── meta.yaml
+    └── chapters/
+        ├── 01.md
+        ├── 02.md
+        └── ...
+```
+
+## Requirements
+
+- Python 3.11+
+- [uv](https://docs.astral.sh/uv/) (`pip install uv` or `curl -Lsf https://astral.sh/uv/install.sh | sh`)
+
+### Why uv instead of venv + pip?
+
+This project uses `uv` as its package manager. If you're used to the classic `python -m venv .venv && pip install -r requirements.txt` workflow, here's the mental mapping:
+
+| Task | venv + pip | uv |
+|------|------------|----|
+| Create virtualenv | `python -m venv .venv` | automatic (managed for you) |
+| Install dependencies | `pip install -r requirements.txt` | `uv sync` |
+| Run a script/command | `source .venv/bin/activate && python ...` | `uv run python ...` |
+| Add a dependency | edit `requirements.txt`, re-run pip | `uv add <package>` (updates `pyproject.toml`) |
+| Install a CLI tool globally | `pip install --user <tool>` | `uv tool install <tool>` |
+
+`uv sync` reads `pyproject.toml` across all workspace members, resolves the full dependency graph once, and writes a `uv.lock` lockfile — the equivalent of `package-lock.json`. You never need to activate the virtualenv manually; `uv run` handles it transparently.
+
+You can still use plain `venv` + `pip` if you prefer — create a virtualenv, then `pip install` the dependencies listed in each `pyproject.toml`. `uv` is just faster and handles the monorepo workspace wiring automatically.
 
 ## Getting started
 
-1. **Install dependencies** (from repo root):
-   ```bash
-   npm install
-   ```
-   This installs workspace deps and runs `playwright install chromium` for the scraper.
+```bash
+# Clone and enter the repo
+git clone <repo-url>
+cd parseltongue
 
-2. **Set up environment variables:**
-   ```bash
-   cp .env.example .env
-   ```
-   Edit `.env` if you need to override defaults (Python path, TTS server URL).
+# Install all workspace packages and their dependencies
+uv sync
 
-3. **Run the scraper** (Phase 1) with one or more AO3 work IDs:
-   ```bash
-   npm run scrape -- 12345 67890
-   ```
-   Options: `-o` / `--output` (output dir), `--delay` (seconds between stories), `--headless`. See `packages/scraper/README.md`.
+# Install Playwright's Chromium browser
+uv run playwright install chromium
 
-4. **Enunciate** (Phase 2) — voice-direct scraped chapters:
-   ```bash
-   npm run enunciate -- 12345              # all chapters
-   npm run enunciate -- 12345 3            # just chapter 3
-   npm run enunciate -- 12345 --voice "A deep, resonant male narrator…"
-   ```
-   Options: `-f` / `--force` (overwrite existing), `-o` / `--output` (data dir), `--voice` (custom voice description).
+# Copy environment template
+cp .env.example .env
+```
 
-   Splits chapters at paragraph boundaries and assigns position-aware voice directions. No external services required — runs instantly.
+## Usage
 
-5. **Set up a Python virtual environment** (Phase 3) — run from the **repo root**:
+### CLI — scrape
 
-   A venv keeps TTS dependencies isolated from your system Python. All Python
-   commands below assume you are in the repo root (`parseltongue/`).
+```bash
+# Scrape one story (browser visible by default)
+uv run parseltongue scrape 12345678
 
-   ```bash
-   # Create the venv (one-time) — run from the repo root
-   python -m venv .venv
+# Scrape multiple stories
+uv run parseltongue scrape 12345678 87654321
 
-   # Activate it (do this every time you open a new terminal)
-   source .venv/bin/activate          # Linux / macOS
-   # .venv\Scripts\activate           # Windows PowerShell
-   ```
+# Headless mode, custom output dir
+uv run parseltongue scrape --headless --output ./my-stories 12345678
 
-   Tell parseltongue to use this venv's Python by adding to `.env`:
-   ```
-   PYTHON_BIN=.venv/bin/python
-   ```
-   This ensures the `speak` command (one-shot mode) finds the right Python.
+# Adjust rate-limit delay (default 2 s, min 2 s)
+uv run parseltongue scrape --delay 5 12345678
+```
 
-6. **Install Python TTS dependencies** — with the venv **activated**, from the repo root:
-   ```bash
-   sudo apt install sox libsox-fmt-all                    # system audio dependency (once)
-   pip install -r requirements.txt                        # installs qwen-tts, torch, gradio, etc.
-   ```
-   The Python packages live in `packages/tts/` (`synthesize.py` and `server.py`), but
-   you install from the repo root where `requirements.txt` is.
+The AO3 work ID is the number in the URL: `https://archiveofourown.org/works/**12345678**`.
 
-   On first run, [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) model weights
-   are downloaded from Hugging Face automatically (~3.5 GB). Requires a GPU.
+### Web app
 
-7. **Start the TTS server** (recommended) — with the venv **activated**, from the repo root:
-   ```bash
-   npm run tts:serve                                     # default: port 7860, cuda:0, design mode
-   npm run tts:serve -- --port 8000 --mode clone         # custom port + clone mode
-   ```
-   This runs `python packages/tts/server.py` under the hood.
+```bash
+uv run parseltongue-web
+# Open http://localhost:8000
+```
 
-   Then set the server URL in `.env`:
-   ```
-   TTS_SERVER_URL=http://localhost:7860
-   ```
-   The server loads Qwen3-TTS models once and keeps them resident on the GPU,
-   eliminating the ~30s model-load penalty on every run.
+## Development
 
-   Alternatively, you can skip the server and use the **one-shot mode** (models
-   load per-run, then exit to free the GPU):
-   ```bash
-   npm run speak -- 78254181 --no-server
-   ```
+```bash
+# Run CLI directly as a module
+uv run python -m parseltongue_cli.main scrape 12345678
 
-8. **Speak** (Phase 3) — convert enunciated chapters to audio:
-   ```bash
-   npm run speak -- 78254181              # all enunciated chapters
-   npm run speak -- 78254181 1            # just chapter 1
-   npm run speak -- 78254181 --mode clone # consistent voice via cloning (~8 GB VRAM)
-   ```
-   Options: `-m` / `--mode` (`design` or `clone`), `-d` / `--device` (torch device), `-l` / `--language`, `-f` / `--force` (overwrite), `--server <url>` (TTS server URL), `--no-server` (force one-shot Python mode).
-
-   When `TTS_SERVER_URL` is set (or `--server` is passed), the speak command
-   sends requests to the warm Gradio server. Otherwise it spawns a one-shot
-   Python process (using `PYTHON_BIN` from `.env`).
-
-   Audio files are saved as `data/stories/<id>/chapters/01.wav`, `02.wav`, etc.
-
-**Important**: Respect the target site's terms and rate limits. Use `--delay` to throttle (default 2s between stories, min 2s at 30 rpm).
-
-## CLI commands (from root)
-
-- `npm run check` — verify that all prerequisites (Python, qwen-tts, TTS server) are available
-- `npm run scrape -- <id> [id ...]` — scrape AO3 stories
-- `npm run enunciate -- <id> [chapter]` — voice-direct chapter Markdown (paragraph splitting + voice directions)
-- `npm run speak -- <id> [chapter]` — synthesise audio from enunciated chapters via Qwen3-TTS
-- `npm run tts:serve` — start the warm TTS server (keeps models loaded between runs)
-
-## TTS modes
-
-The `speak` command supports two synthesis modes:
-
-| Mode | Flag | How it works | Trade-off |
-|------|------|--------------|-----------|
-| **design** (default) | `--mode design` | Runs VoiceDesign per segment with `VOICE:` + `INSTRUCT:` combined | Richer per-segment emotion, ~4 GB VRAM, slight voice drift |
-| **clone** | `--mode clone` | Designs a voice once, then clones it for every segment | Consistent timbre, ~8 GB VRAM, less per-segment expression |
-
-## TTS server vs one-shot mode
-
-| Backend | How to use | Trade-off |
-|---------|-----------|-----------|
-| **Server** (recommended) | `npm run tts:serve` in one terminal, set `TTS_SERVER_URL` in `.env` | Models stay warm, no reload per-run, per-segment caching |
-| **One-shot** | `npm run speak -- <id> --no-server` | Models load/unload per-run (~30s penalty), frees GPU between runs |
-
-The server also provides **per-segment caching** (hashes segment content to a WAV file in `~/.cache/parseltongue/tts/`) and **automatic retry** with exponential backoff for failed segments.
-
-## Turbo commands (from root)
-
-- `npm run build` — build all packages that define `build`
-- `npm run dev` — run `dev` in all apps (e.g. dev servers)
-- `npm run lint` — lint all packages
+# Run web app with auto-reload
+uv run uvicorn parseltongue_web.main:app --reload --app-dir apps/web
+```

@@ -1,0 +1,21 @@
+[project]
+name = "parseltongue-web"
+version = "0.1.0"
+description = "Phase 4: Web app to browse and listen to stories"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.29.0",
+    "parseltongue-scraper",
+    "python-dotenv>=1.0.0",
+]
+
+[project.scripts]
+parseltongue-web = "parseltongue_web.main:start"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+parseltongue-scraper = { workspace = true }

@@ -2,8 +2,9 @@
 data/stories/
 *.env
 .env.*
+.env
 
-# Node
+# Node (legacy — no longer used)
 node_modules/
 
 # Python
@@ -12,7 +13,10 @@ __pycache__/
 *$py.class
 .venv/
 venv/
-.env
+*.egg-info/
+dist/
+build/
+.uv/
 
 # IDE
 .idea/

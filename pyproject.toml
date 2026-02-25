@@ -1,0 +1,17 @@
+[project]
+name = "parseltongue"
+version = "0.1.0"
+description = "Fan fiction pipeline: scrape → enunciate → speak → consume"
+requires-python = ">=3.11"
+# Workspace-level dependencies make CLI and web scripts available via `uv run`
+dependencies = [
+    "parseltongue-cli",
+    "parseltongue-web",
+]
+
+[tool.uv.workspace]
+members = ["apps/*", "packages/*"]
+
+[tool.uv.sources]
+parseltongue-cli = { workspace = true }
+parseltongue-web = { workspace = true }
