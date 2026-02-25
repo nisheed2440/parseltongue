@@ -1,5 +1,8 @@
 # Data and secrets
 data/stories/
+
+# Logs (scraper.log + failure screenshots)
+logs/
 *.env
 .env.*
 .env

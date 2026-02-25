@@ -89,14 +89,14 @@ cp .env.example .env
 ### CLI — scrape
 
 ```bash
-# Scrape one story (browser visible by default)
+# Scrape one story
 uv run parseltongue scrape 12345678
 
 # Scrape multiple stories
 uv run parseltongue scrape 12345678 87654321
 
-# Headless mode, custom output dir
-uv run parseltongue scrape --headless --output ./my-stories 12345678
+# Custom output dir
+uv run parseltongue scrape --output ./my-stories 12345678
 
 # Adjust rate-limit delay (default 2 s, min 2 s)
 uv run parseltongue scrape --delay 5 12345678

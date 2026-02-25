@@ -6,6 +6,7 @@ requires-python = ">=3.11"
 members = [
     "parseltongue",
     "parseltongue-cli",
+    "parseltongue-logger",
     "parseltongue-scraper",
     "parseltongue-web",
 ]
@@ -238,6 +239,7 @@ name = "parseltongue-cli"
 version = "0.1.0"
 source = { editable = "apps/cli" }
 dependencies = [
+    { name = "parseltongue-logger" },
     { name = "parseltongue-scraper" },
     { name = "python-dotenv" },
     { name = "typer" },
@@ -245,10 +247,22 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "parseltongue-logger", editable = "packages/logger" },
     { name = "parseltongue-scraper", editable = "packages/scraper" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "typer", specifier = ">=0.12.0" },
 ]
+
+[[package]]
+name = "parseltongue-logger"
+version = "0.1.0"
+source = { editable = "packages/logger" }
+dependencies = [
+    { name = "rich" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "rich", specifier = ">=13.0.0" }]
 
 [[package]]
 name = "parseltongue-scraper"
@@ -256,6 +270,7 @@ version = "0.1.0"
 source = { editable = "packages/scraper" }
 dependencies = [
     { name = "beautifulsoup4" },
+    { name = "parseltongue-logger" },
     { name = "playwright" },
     { name = "pyyaml" },
 ]
@@ -263,6 +278,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "beautifulsoup4", specifier = ">=4.12.0" },
+    { name = "parseltongue-logger", editable = "packages/logger" },
     { name = "playwright", specifier = ">=1.40.0" },
     { name = "pyyaml", specifier = ">=6.0.0" },
 ]
@@ -273,6 +289,7 @@ version = "0.1.0"
 source = { editable = "apps/web" }
 dependencies = [
     { name = "fastapi" },
+    { name = "parseltongue-logger" },
     { name = "parseltongue-scraper" },
     { name = "python-dotenv" },
     { name = "uvicorn", extra = ["standard"] },
@@ -281,6 +298,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.110.0" },
+    { name = "parseltongue-logger", editable = "packages/logger" },
     { name = "parseltongue-scraper", editable = "packages/scraper" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.29.0" },
