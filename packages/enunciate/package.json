@@ -5,8 +5,5 @@
   "description": "Phase 2: Voice-direct scraped chapter Markdown for natural spoken delivery",
   "type": "module",
   "main": "index.js",
-  "exports": "./index.js",
-  "dependencies": {
-    "fs-extra": "^11.2.0"
-  }
+  "exports": "./index.js"
 }

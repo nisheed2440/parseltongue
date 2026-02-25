@@ -14,7 +14,8 @@ function findRepoRoot(startDir = process.cwd()) {
 }
 
 export const command = "enunciate <storyId> [chapter]";
-export const describe = "Voice-direct chapter Markdown for spoken delivery using local Ollama";
+export const describe =
+  "Voice-direct chapter Markdown for spoken delivery (paragraph splitting + voice directions)";
 
 export function builder(yargs) {
   return yargs
@@ -31,17 +32,16 @@ export function builder(yargs) {
       type: "string",
       describe: "Output directory (default: data/stories under repo root)",
     })
-    .option("model", {
-      alias: "m",
-      type: "string",
-      default: "qwen3:8b",
-      describe: "Ollama model name",
-    })
     .option("force", {
       alias: "f",
       type: "boolean",
       default: false,
       describe: "Overwrite existing enunciated files",
+    })
+    .option("voice", {
+      type: "string",
+      describe:
+        'Custom VOICE description (e.g. "A deep, resonant male narrator…")',
     })
     .example("$0 enunciate 12345", "Enunciate all chapters")
     .example("$0 enunciate 12345 3", "Enunciate only chapter 3")
@@ -71,7 +71,7 @@ function discoverChapters(storyDir) {
 }
 
 export async function handler(argv) {
-  const { storyId, chapter, output, model, force } = argv;
+  const { storyId, chapter, output, force, voice } = argv;
 
   const root = findRepoRoot();
   const baseDir = path.resolve(output || path.join(root, "data", "stories"));
@@ -93,7 +93,7 @@ export async function handler(argv) {
   }
 
   console.log(
-    `Enunciating ${chapters.length} chapter(s) of story ${storyId} with ${model}...`
+    `Enunciating ${chapters.length} chapter(s) of story ${storyId} …`
   );
 
   for (const num of chapters) {
@@ -111,10 +111,10 @@ export async function handler(argv) {
     }
 
     const chapterText = fse.readFileSync(srcPath, "utf-8");
-    console.log(`  ch ${num}: sending to Ollama/${model} (${chapterText.length} chars)...`);
+    console.log(`  ch ${num}: ${chapterText.length} chars …`);
 
     try {
-      const result = await enunciateChapter(chapterText, { model });
+      const result = enunciateChapter(chapterText, { voice });
       fse.outputFileSync(destPath, result);
       console.log(`  ch ${num}: saved -> ${path.relative(root, destPath)}`);
     } catch (err) {

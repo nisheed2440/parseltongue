@@ -1,21 +1,6 @@
-import fse from "fs-extra";
-import path from "path";
-import { fileURLToPath } from "url";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PROMPT_PATH = path.join(__dirname, "voice-direction-prompt.md");
-
-const DEFAULT_MODEL = "qwen3:8b";
-const DEFAULT_BASE_URL = "http://localhost:11434";
-
-let _systemPrompt = null;
-
-function getSystemPrompt() {
-  if (!_systemPrompt) {
-    _systemPrompt = fse.readFileSync(PROMPT_PATH, "utf-8");
-  }
-  return _systemPrompt;
-}
+// ---------------------------------------------------------------------------
+// Text helpers
+// ---------------------------------------------------------------------------
 
 /**
  * Extract a leading markdown heading from chapter text.
@@ -31,7 +16,7 @@ function extractHeading(text) {
 
 /**
  * Inject a chapter-title segment right after the VOICE: line.
- * If the LLM already included it, skip injection.
+ * If the heading text already appears in the output, skip injection.
  */
 function ensureChapterHeading(output, heading) {
   if (!heading) return output;
@@ -56,43 +41,72 @@ function ensureChapterHeading(output, heading) {
   return `${voiceLine}${titleSegment}\n\n${rest}`;
 }
 
+// ---------------------------------------------------------------------------
+// Markdown stripping
+// ---------------------------------------------------------------------------
+
 /**
- * Enunciate a chapter's markdown text using a local Ollama model.
+ * Strip markdown formatting from text so it is clean for TTS.
+ * Removes headings (#), bold/italic markers, blockquotes, and list bullets.
+ */
+function stripMarkdown(text) {
+  return text
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/\*{1,3}(.+?)\*{1,3}/g, "$1")
+    .replace(/_{1,3}(.+?)_{1,3}/g, "$1")
+    .replace(/^>\s?/gm, "")
+    .replace(/^[-*+]\s+/gm, "")
+    .replace(/^\d+\.\s+/gm, "")
+    .trim();
+}
+
+// ---------------------------------------------------------------------------
+// Enunciation
+// ---------------------------------------------------------------------------
+
+const DEFAULT_VOICE =
+  "A warm, clear narrator with a natural storytelling cadence, " +
+  "engaging pacing, and expressive delivery suitable for long-form fiction.";
+
+const INSTRUCTS = {
+  first: "Read the opening with a clear, inviting tone. Set the scene.",
+  middle: "Continue reading naturally with clear pacing and gentle expression.",
+  last: "Read with a sense of closing. Let the final words settle.",
+};
+
+/**
+ * Produce voice-directed markdown from raw chapter text.
+ *
+ * Splits the chapter at paragraph boundaries, assigns a VOICE description
+ * and position-aware INSTRUCT lines.  The output format is consumed by the
+ * TTS pipeline (`packages/tts`).
  *
  * @param {string} chapterText - Raw chapter markdown content
  * @param {object} [opts]
- * @param {string} [opts.model]   - Ollama model name (default: qwen3:8b)
- * @param {string} [opts.baseUrl] - Ollama server URL (default: http://localhost:11434)
- * @returns {Promise<string>} Voice-directed markdown
+ * @param {string} [opts.voice] - Custom VOICE description (overrides default)
+ * @returns {string} Voice-directed markdown
  */
-export async function enunciateChapter(chapterText, opts = {}) {
-  const modelName = opts.model || DEFAULT_MODEL;
-  const baseUrl = (opts.baseUrl || process.env.OLLAMA_HOST || DEFAULT_BASE_URL).replace(/\/+$/, "");
-
+export function enunciateChapter(chapterText, opts = {}) {
+  const voice = opts.voice || DEFAULT_VOICE;
   const { heading, body } = extractHeading(chapterText.trim());
 
-  const res = await fetch(`${baseUrl}/api/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: modelName,
-      messages: [
-        { role: "system", content: getSystemPrompt() },
-        { role: "user", content: body },
-      ],
-      stream: false,
-    }),
-  });
+  const paragraphs = body
+    .split(/\n{2,}/)
+    .map((p) => stripMarkdown(p))
+    .filter((p) => p.length > 0);
 
-  if (!res.ok) {
-    const errBody = await res.text().catch(() => "");
-    throw new Error(`Ollama request failed (${res.status}): ${errBody}`);
+  if (paragraphs.length === 0) {
+    return `VOICE: ${voice}\n\n---\n\nINSTRUCT: ${INSTRUCTS.middle}\nTEXT: ${body.trim() || chapterText.trim()}`;
   }
 
-  const data = await res.json();
-  let output = data.message.content;
+  const segments = paragraphs.map((text, i) => {
+    let instruct;
+    if (i === 0) instruct = INSTRUCTS.first;
+    else if (i === paragraphs.length - 1) instruct = INSTRUCTS.last;
+    else instruct = INSTRUCTS.middle;
+    return `INSTRUCT: ${instruct}\nTEXT: ${text}`;
+  });
 
-  output = output.replace(/^```\w*\n?/, "").replace(/\n?```\s*$/, "");
-
-  return ensureChapterHeading(output.trim(), heading);
+  const output = `VOICE: ${voice}\n\n---\n\n${segments.join("\n\n---\n\n")}`;
+  return ensureChapterHeading(output, heading);
 }

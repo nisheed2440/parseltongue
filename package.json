@@ -8,6 +8,9 @@
     "dev": "turbo run dev",
     "scrape": "node apps/cli/run.js scrape",
     "enunciate": "node apps/cli/run.js enunciate",
+    "speak": "node apps/cli/run.js speak",
+    "check": "node apps/cli/run.js check",
+    "tts:serve": "python packages/tts/server.py",
     "lint": "turbo run lint",
     "postinstall": "npm run postinstall --workspace=@parseltongue/scraper"
   },

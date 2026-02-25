@@ -2,5 +2,11 @@
   "name": "@parseltongue/tts",
   "version": "0.1.0",
   "private": true,
-  "description": "Phase 3: ElevenLabs TTS — chapter Markdown → audio"
+  "description": "Phase 3: Qwen3-TTS — enunciated chapter Markdown → audio",
+  "type": "module",
+  "main": "index.js",
+  "dependencies": {
+    "@gradio/client": "^1.14.0",
+    "fs-extra": "^11.2.0"
+  }
 }

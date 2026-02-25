@@ -4,7 +4,11 @@ beautifulsoup4>=4.12.0
 pyyaml>=6.0.0
 playwright>=1.40.0
 
-# Phase 2: Enunciation (LLM-based; no additional Python deps — uses API calls)
+# Phase 2: Enunciation (pure JS — no Python deps needed)
 
-# Phase 3: TTS (placeholders; uncomment when implementing)
-# elevenlabs>=0.2.0
+# Phase 3: TTS (Qwen3-TTS, spawned by the speak command)
+qwen-tts
+torch
+soundfile
+numpy
+gradio
