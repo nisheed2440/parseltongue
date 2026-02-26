@@ -9,9 +9,10 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 
-from parseltongue_cli.commands import scrape  # noqa: E402
+from parseltongue_cli.commands import direct, scrape  # noqa: E402
 
 app.add_typer(scrape.app, name="scrape")
+app.add_typer(direct.app, name="direct")
 
 if __name__ == "__main__":
     app()

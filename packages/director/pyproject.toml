@@ -1,0 +1,18 @@
+[project]
+name = "parseltongue-director"
+version = "0.1.0"
+description = "Phase 2: Direct chapters for audiobook TTS using a local LLM"
+requires-python = ">=3.11"
+dependencies = [
+    "ollama>=0.4.0",
+    "parseltongue-logger",
+    "parseltongue-scraper",
+]
+
+[tool.uv.sources]
+parseltongue-logger = { workspace = true }
+parseltongue-scraper = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
