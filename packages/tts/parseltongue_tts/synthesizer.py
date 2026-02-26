@@ -49,7 +49,7 @@ if TYPE_CHECKING:
     from qwen_tts import Qwen3TTSModel
 
 # Called after each chunk: (chunk_index, total_chunks, chunk_text)
-ChunkCallback = Callable[[int, int, str], None]
+ChunkCallback = Callable[[int, int, str, "str | None"], None]
 
 log = get_logger(__name__)
 
@@ -228,16 +228,28 @@ def _synthesize_chunk(
     voice_name: str,
     out_path: Path,
     language: str | None = None,
+    instruct: str | None = None,
 ) -> None:
-    """Synthesize one text chunk and write it as a WAV file."""
+    """Synthesize one text chunk and write it as a WAV file.
+
+    If *instruct* is provided it is forwarded to ``generate_voice_clone`` as a
+    speaking-style directive (e.g. ``"Emotion: nostalgic, Pacing: measured"``).
+    The 1.7B-Base model supports this; leaving it ``None`` uses the model's
+    default neutral style.
+    """
     prompt_items, default_language = _get_voice_prompt(voice_name)
     resolved_language = language or default_language
 
     model = get_model()
+    kwargs: dict = {}
+    if instruct:
+        kwargs["instruct"] = instruct
+
     wavs, sr = model.generate_voice_clone(
         text=text,
         language=resolved_language,
         voice_clone_prompt=prompt_items,
+        **kwargs,
     )
 
     audio: np.ndarray = np.asarray(wavs[0], dtype=np.float32)
@@ -257,6 +269,7 @@ def synthesize_chapter(
     language: str | None = None,
     silence_ms: int = DEFAULT_SILENCE_MS,
     overwrite: bool = False,
+    use_instruct: bool = True,
     on_chunk: ChunkCallback | None = None,
 ) -> str:
     """Synthesize all chunks of one directed chapter and stitch them together.
@@ -277,7 +290,11 @@ def synthesize_chapter(
         language:       Override the language stored in the voice profile.
         silence_ms:     Milliseconds of silence inserted between chunks.
         overwrite:      Re-synthesize chunks that already have WAV files.
-        on_chunk:       Optional callback ``(chunk_index, total, text)`` called
+        use_instruct:   If ``True`` (default), forward the ``instruct`` field
+                        from each directed chunk to the model as a speaking-
+                        style directive.  Set to ``False`` to ignore directions
+                        and use the model's neutral default style.
+        on_chunk:       Optional callback ``(chunk_index, total, text, instruct)`` called
                         after each chunk is synthesised.
 
     Returns:
@@ -307,17 +324,23 @@ def synthesize_chapter(
         chunk_path = chapter_dir / f"{idx:04d}.wav"
         chunk_paths.append(chunk_path)
 
+        instruct = chunk.get("instruct") if use_instruct else None
+
         if chunk_path.exists() and not overwrite:
             log.debug("Chunk %04d already exists – skipping", idx)
             if on_chunk:
-                on_chunk(idx, total, text)
+                on_chunk(idx, total, text, instruct)
             continue
 
-        log.debug("Synthesising chunk %04d/%04d (%d words)", idx, total, len(text.split()))
-        _synthesize_chunk(text, voice_name, chunk_path, language=language)
+        log.debug(
+            "Synthesising chunk %04d/%04d (%d words)%s",
+            idx, total, len(text.split()),
+            f" [instruct: {instruct[:60]}…]" if instruct else "",
+        )
+        _synthesize_chunk(text, voice_name, chunk_path, language=language, instruct=instruct)
 
         if on_chunk:
-            on_chunk(idx, total, text)
+            on_chunk(idx, total, text, instruct)
 
     out_path = story_dir / "audio" / f"{chapter_index:02d}.wav"
     stitch_wav_files(chunk_paths, out_path, silence_ms=silence_ms)
@@ -337,19 +360,22 @@ def synthesize_work(
     language: str | None = None,
     silence_ms: int = DEFAULT_SILENCE_MS,
     overwrite: bool = False,
+    use_instruct: bool = True,
     on_chunk: ChunkCallback | None = None,
 ) -> dict[int, str]:
     """Synthesize all (or selected) chapters of a work.
 
     Args:
-        story_id:    Work ID.
-        voice_name:  Name of a registered voice profile.
-        base_dir:    Root data directory.
-        chapters:    If given, only process these 1-based chapter indices.
-        language:    Override the language stored in the voice profile.
-        silence_ms:  Silence between chunks in milliseconds.
-        overwrite:   Re-synthesize existing chunk WAVs.
-        on_chunk:    Optional callback per chunk.
+        story_id:     Work ID.
+        voice_name:   Name of a registered voice profile.
+        base_dir:     Root data directory.
+        chapters:     If given, only process these 1-based chapter indices.
+        language:     Override the language stored in the voice profile.
+        silence_ms:   Silence between chunks in milliseconds.
+        overwrite:    Re-synthesize existing chunk WAVs.
+        use_instruct: Forward the ``instruct`` field from each chunk to the
+                      model as a speaking-style directive.
+        on_chunk:     Optional callback per chunk.
 
     Returns:
         Mapping of chapter_index → path of the stitched WAV file.
@@ -389,6 +415,7 @@ def synthesize_work(
             language=language,
             silence_ms=silence_ms,
             overwrite=overwrite,
+            use_instruct=use_instruct,
             on_chunk=on_chunk,
         )
         results[ch_idx] = out

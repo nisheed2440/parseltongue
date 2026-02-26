@@ -64,6 +64,39 @@ def check_ollama(model: str | None = None) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Chapter ordinal helper
+# ---------------------------------------------------------------------------
+
+_ONES = [
+    "", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine",
+    "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen",
+    "Seventeen", "Eighteen", "Nineteen",
+]
+_TENS = ["", "", "Twenty", "Thirty", "Forty", "Fifty",
+         "Sixty", "Seventy", "Eighty", "Ninety"]
+
+
+def _chapter_ordinal(n: int) -> str:
+    """Return the spoken ordinal form.
+
+    Examples: 1 → 'One', 21 → 'Twenty-One', 100 → 'One Hundred',
+              115 → 'One Hundred Fifteen', 121 → 'One Hundred Twenty-One'.
+    """
+    if 1 <= n < 20:
+        return _ONES[n]
+    if n < 100:
+        tens, ones = divmod(n, 10)
+        return _TENS[tens] if ones == 0 else f"{_TENS[tens]}-{_ONES[ones]}"
+    if n < 1000:
+        hundreds, remainder = divmod(n, 100)
+        base = f"{_ONES[hundreds]} Hundred"
+        if remainder == 0:
+            return base
+        return f"{base} {_chapter_ordinal(remainder)}"
+    return str(n)
+
+
+# ---------------------------------------------------------------------------
 # Text chunking
 # ---------------------------------------------------------------------------
 
@@ -90,12 +123,18 @@ def _split_paragraph(para: str, max_words: int) -> list[str]:
     return chunks
 
 
-def split_into_chunks(text: str, max_words: int = DEFAULT_MAX_WORDS) -> list[str]:
+def split_into_chunks(
+    text: str,
+    max_words: int = DEFAULT_MAX_WORDS,
+    chapter_index: int | None = None,
+) -> list[str]:
     """Split chapter text into chunks, one paragraph per chunk.
 
     Strategy:
     - Split on blank lines to get natural paragraphs.
-    - Drop the leading Markdown heading (# ...).
+    - Any leading Markdown headings (``# …``) are always stripped.
+    - If *chapter_index* is provided, ``"Chapter One"`` etc. is prepended as
+      the very first chunk regardless of whether a heading was present.
     - Each paragraph is always its own chunk — paragraphs are never merged.
     - If a single paragraph exceeds *max_words*, it is split at sentence
       boundaries to stay within the limit.
@@ -118,11 +157,13 @@ def split_into_chunks(text: str, max_words: int = DEFAULT_MAX_WORDS) -> list[str
         if para:
             paragraphs.append(para)
 
-    # Drop Markdown heading(s) at the top
+    # Strip any leading Markdown headings
     while paragraphs and paragraphs[0].lstrip().startswith("#"):
         paragraphs.pop(0)
 
     chunks: list[str] = []
+    if chapter_index is not None:
+        chunks.append(f"Chapter {_chapter_ordinal(chapter_index)}")
     for para in paragraphs:
         if len(para.split()) > max_words:
             chunks.extend(_split_paragraph(para, max_words))
@@ -162,13 +203,15 @@ def _extract_instruct(raw: str) -> str:
 def chunk_chapter(
     chapter_text: str,
     max_words: int = DEFAULT_MAX_WORDS,
+    chapter_index: int | None = None,
 ) -> list[dict]:
     """Split *chapter_text* into chunks and return them without any AI direction.
 
     Each item contains only ``chunk_index`` and ``text`` — no ``instruct``.
-    Useful for previewing the chunking layout or building a plain transcript.
+    If *chapter_index* is provided and the file starts with a ``# heading``,
+    the heading is replaced by the spoken form ``"Chapter One"`` etc.
     """
-    chunks = split_into_chunks(chapter_text, max_words=max_words)
+    chunks = split_into_chunks(chapter_text, max_words=max_words, chapter_index=chapter_index)
     return [{"chunk_index": i, "text": chunk} for i, chunk in enumerate(chunks, 1)]
 
 
@@ -209,7 +252,7 @@ def chunk_work(
 
         log.info("Chunking chapter %02d: %s", idx, chapter_path.name)
         chapter_text = chapter_path.read_text(encoding="utf-8")
-        chunks = chunk_chapter(chapter_text, max_words=max_words)
+        chunks = chunk_chapter(chapter_text, max_words=max_words, chapter_index=idx)
 
         with open(out_path, "w", encoding="utf-8") as fh:
             json.dump(chunks, fh, ensure_ascii=False, indent=2)
@@ -240,10 +283,14 @@ def direct_chunk(chunk_text: str, model: str | None = None) -> str:
     return _extract_instruct(response.message.content)
 
 
+_TITLE_INSTRUCT = "Announce the chapter title clearly, steady and measured pace, slight pause after."
+
+
 def direct_chapter(
     chapter_text: str,
     model: str | None = None,
     max_words: int = DEFAULT_MAX_WORDS,
+    chapter_index: int | None = None,
     on_chunk: "ChunkCallback | None" = None,
 ) -> list[dict]:
     """Chunk *chapter_text* and direct each chunk.
@@ -252,20 +299,28 @@ def direct_chapter(
     The model only provides the ``instruct`` field — the ``text`` field is set
     verbatim from the source, guaranteeing the manuscript is never rewritten.
 
+    If *chapter_index* is provided and the chapter file starts with a
+    ``# heading``, the heading is replaced by ``"Chapter One"`` etc. and given
+    a fixed instruct without consulting the model.
+
     *on_chunk* is called after each chunk with ``(index, total, text, instruct)``.
 
     Returns a list of dicts with keys: ``chunk_index``, ``text``, ``instruct``.
     """
     resolved_model = model or _default_model()
-    chunks = split_into_chunks(chapter_text, max_words=max_words)
+    chunks = split_into_chunks(chapter_text, max_words=max_words, chapter_index=chapter_index)
     log.debug(
         "Chapter split into %d chunks (max %d words each)", len(chunks), max_words
     )
 
     results: list[dict] = []
     for i, chunk in enumerate(chunks, 1):
-        log.debug("Directing chunk %d/%d (%d words)", i, len(chunks), len(chunk.split()))
-        instruct = direct_chunk(chunk, model=resolved_model)
+        # Title chunks (e.g. "Chapter One") get a fixed instruct — no model call needed.
+        if chapter_index is not None and i == 1 and chunk == f"Chapter {_chapter_ordinal(chapter_index)}":
+            instruct = _TITLE_INSTRUCT
+        else:
+            log.debug("Directing chunk %d/%d (%d words)", i, len(chunks), len(chunk.split()))
+            instruct = direct_chunk(chunk, model=resolved_model)
         results.append({"chunk_index": i, "text": chunk, "instruct": instruct})
         if on_chunk:
             on_chunk(i, len(chunks), chunk, instruct)
@@ -324,7 +379,11 @@ def direct_work(
         chapter_text = chapter_path.read_text(encoding="utf-8")
 
         sentences = direct_chapter(
-            chapter_text, model=model, max_words=max_words, on_chunk=on_chunk
+            chapter_text,
+            model=model,
+            max_words=max_words,
+            chapter_index=idx,
+            on_chunk=on_chunk,
         )
 
         with open(out_path, "w", encoding="utf-8") as fh:

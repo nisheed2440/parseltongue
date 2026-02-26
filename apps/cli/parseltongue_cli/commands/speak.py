@@ -136,6 +136,10 @@ def run_cmd(
         bool,
         typer.Option("--overwrite", help="Re-synthesise chunks that already have audio files"),
     ] = False,
+    use_instruct: Annotated[
+        bool,
+        typer.Option("--instruct/--no-instruct", help="Forward AI voice directions to the model (default: on)"),
+    ] = True,
     ref_audio: Annotated[
         Path | None,
         typer.Option("--ref-audio", "-a", help="Register this reference audio before synthesising"),
@@ -206,8 +210,9 @@ def run_cmd(
         console.print(
             Rule(f"[bold cyan]Story {i}/{total_stories}  ·  work {story_id}[/bold cyan]")
         )
-        console.print(f"[dim]Voice:[/dim]  {voice}")
-        console.print(f"[dim]Model:[/dim]  {model_id}  on  {device}\n")
+        console.print(f"[dim]Voice:[/dim]    {voice}")
+        console.print(f"[dim]Model:[/dim]    {model_id}  on  {device}")
+        console.print(f"[dim]Instruct:[/dim] {'on' if use_instruct else 'off'}\n")
 
         story_dir = Path(stories_dir) / sanitize_id(story_id)
         directed_root = story_dir / "directed"
@@ -261,10 +266,14 @@ def run_cmd(
                 )
 
                 def make_callback(tid):
-                    def cb(chunk_idx: int, total: int, text: str) -> None:
+                    def cb(chunk_idx: int, total: int, text: str, instruct: str | None) -> None:
+                        instruct_line = (
+                            f"\n     [italic dim]{instruct}[/italic dim]" if instruct else ""
+                        )
                         progress.console.print(
                             f"  [bold]Chunk {chunk_idx}/{total}[/bold]  "
                             f"[dim]{_truncate(text)}[/dim]"
+                            f"{instruct_line}"
                         )
                         progress.update(tid, completed=chunk_idx, total=total)
                     return cb
@@ -278,6 +287,7 @@ def run_cmd(
                         language=language,
                         silence_ms=silence_ms,
                         overwrite=overwrite,
+                        use_instruct=use_instruct,
                         on_chunk=make_callback(task_id),
                     )
                     chapter_results[ch_idx] = out

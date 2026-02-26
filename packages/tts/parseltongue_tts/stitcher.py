@@ -25,7 +25,7 @@ def _silence_samples(duration_ms: int, sample_rate: int, channels: int) -> np.nd
 def stitch_wav_files(
     paths: list[Path],
     out_path: Path,
-    silence_ms: int = 400,
+    silence_ms: int = 500,
 ) -> Path:
     """Concatenate WAV files in *paths* into a single *out_path* WAV.
 
