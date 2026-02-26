@@ -2,7 +2,7 @@
 
 Fan fiction pipeline: **scrape → enunciate → speak → consume**
 
-Turn AO3 stories into audio books — scrape chapters to Markdown, add AI voice direction via Qwen3 8b on Ollama, synthesize with Qwen3-TTS, and browse through a web app.
+Turn AO3 stories into audio books — scrape chapters to Markdown, add AI voice direction via Qwen3 8b on Ollama, synthesize with Qwen3-TTS voice cloning, and browse through a web app.
 
 ## Roadmap
 
@@ -10,7 +10,7 @@ Turn AO3 stories into audio books — scrape chapters to Markdown, add AI voice 
 |-------|---------|--------|-------------|
 | 1 | `packages/scraper` | ✅ Done | Scrape AO3 stories → Markdown + `meta.yaml` |
 | 2 | `packages/director` | ✅ Done | AI voice direction using Qwen3 8b on Ollama |
-| 3 | `packages/tts` | 🔜 Next | Text-to-speech using Qwen3-TTS |
+| 3 | `packages/tts` | ✅ Done | Text-to-speech using Qwen3-TTS voice cloning |
 | 4 | `apps/web` | 🔜 Next | Web app to browse and listen to stories |
 
 ## Project layout
@@ -25,7 +25,8 @@ parseltongue/
 │   │       ├── main.py
 │   │       └── commands/
 │   │           ├── scrape.py
-│   │           └── direct.py
+│   │           ├── direct.py
+│   │           └── speak.py
 │   └── web/                    # FastAPI web app (Phase 4)
 │       └── parseltongue_web/
 │           └── main.py
@@ -35,24 +36,34 @@ parseltongue/
     │       ├── ao3_adapter.py
     │       ├── metadata.py
     │       └── repository.py
-    └── director/               # Phase 2 — Audiobook direction via Ollama
-        └── parseltongue_director/
-            ├── director.py
-            └── prompts.py
+    ├── director/               # Phase 2 — Audiobook direction via Ollama
+    │   └── parseltongue_director/
+    │       ├── director.py
+    │       └── prompts.py
+    └── tts/                    # Phase 3 — TTS synthesis via Qwen3-TTS
+        └── parseltongue_tts/
+            ├── synthesizer.py
+            └── stitcher.py
 ```
 
-Scraped data lands in `data/stories/<work_id>/`; directed scripts appear alongside it:
+Scraped data and generated audio land in `data/stories/<work_id>/`:
+
 ```
 data/stories/
 └── 12345/
     ├── meta.yaml
     ├── chapters/
     │   ├── 01.md
-    │   ├── 02.md
     │   └── ...
-    └── directed/
-        ├── 01.json
-        ├── 02.json
+    ├── directed/
+    │   ├── 01.json             # chunk_index + text + instruct
+    │   └── ...
+    └── audio/
+        ├── 01/
+        │   ├── 0001.wav        # per-chunk audio (resumable)
+        │   ├── 0002.wav
+        │   └── ...
+        ├── 01.wav              # stitched chapter audio
         └── ...
 ```
 
@@ -60,7 +71,8 @@ data/stories/
 
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/) (`pip install uv` or `curl -Lsf https://astral.sh/uv/install.sh | sh`)
-- [Ollama](https://ollama.com/) with the `qwen3:8b` model pulled (`ollama pull qwen3:8b`) — required for the `direct` command
+- [Ollama](https://ollama.com/) with the `qwen3:8b` model pulled — required for the `direct` command
+- A running [Qwen3-TTS server](#setting-up-qwen3-tts-locally) — required for the `speak` command
 
 ### Why uv instead of venv + pip?
 
@@ -75,8 +87,6 @@ This project uses `uv` as its package manager. If you're used to the classic `py
 | Install a CLI tool globally | `pip install --user <tool>` | `uv tool install <tool>` |
 
 `uv sync` reads `pyproject.toml` across all workspace members, resolves the full dependency graph once, and writes a `uv.lock` lockfile — the equivalent of `package-lock.json`. You never need to activate the virtualenv manually; `uv run` handles it transparently.
-
-You can still use plain `venv` + `pip` if you prefer — create a virtualenv, then `pip install` the dependencies listed in each `pyproject.toml`. `uv` is just faster and handles the monorepo workspace wiring automatically.
 
 ## Getting started
 
@@ -94,6 +104,8 @@ uv run playwright install chromium
 # Copy environment template
 cp .env.example .env
 ```
+
+---
 
 ## Usage
 
@@ -114,6 +126,8 @@ uv run parseltongue scrape --delay 5 12345678
 ```
 
 The AO3 work ID is the number in the URL: `https://archiveofourown.org/works/**12345678**`.
+
+---
 
 ### CLI — direct
 
@@ -182,21 +196,169 @@ uv run parseltongue direct --simple 12345678
 uv run parseltongue direct --simple --max-words 150 --chapter 1 12345678
 ```
 
-Output JSON format:
+---
 
-```json
-[
-  { "chunk_index": 1, "text": "She could see Pansy Parkinson standing a few feet away…" },
-  { "chunk_index": 2, "text": "Platform nine and three quarters was slowly filling up…" }
-]
-```
+### CLI — speak
 
-### Web app
+The `speak` command synthesises directed chapters into audio using Qwen3-TTS in
+voice clone mode. It requires a running Qwen3-TTS server (see
+[Setting up Qwen3-TTS locally](#setting-up-qwen3-tts-locally)).
+
+Each chunk is rendered individually and saved as a WAV file. Interrupted runs
+are resumable — already-rendered chunks are skipped. When all chunks for a
+chapter are done, they are stitched into a single chapter WAV.
+
+Configuration via `.env` (see `.env.example`):
+
+| Variable | Default | Description |
+|---|---|---|
+| `TTS_SERVER_URL` | `http://localhost:8880` | Qwen3-TTS OpenAI-compatible server URL |
+
+#### Step 1 — Register your voice (once)
+
+Record 10–20 seconds of yourself reading clearly with no background noise. Save
+it as a WAV, MP3, or M4A file. Then register it as a named profile:
 
 ```bash
-uv run parseltongue-web
-# Open http://localhost:8000
+uv run parseltongue speak register-voice myvoice \
+    --ref-audio /path/to/myvoice.wav \
+    --ref-text "Exact words you spoke in the recording."
 ```
+
+The profile is written to `~/qwen3-tts/voice_library/profiles/myvoice/` where
+the TTS server looks for it. You only need to do this once per voice; re-run
+with `--overwrite` to replace it.
+
+```bash
+# Options
+uv run parseltongue speak register-voice myvoice \
+    --ref-audio myvoice.wav \
+    --ref-text "Exact transcript of the clip." \
+    --language English \          # default
+    --overwrite                   # replace existing profile
+```
+
+#### Step 2 — Synthesise
+
+```bash
+# Synthesise all directed chapters of a story
+uv run parseltongue speak run 12345678 --voice myvoice
+
+# Only specific chapters
+uv run parseltongue speak run 12345678 --voice myvoice --chapter 1 --chapter 2
+
+# Register voice and synthesise in one step
+uv run parseltongue speak run 12345678 --voice myvoice \
+    --ref-audio myvoice.wav \
+    --ref-text "Exact transcript."
+
+# Re-synthesise everything from scratch
+uv run parseltongue speak run 12345678 --voice myvoice --overwrite
+
+# Adjust silence between chunks (default: 400 ms)
+uv run parseltongue speak run 12345678 --voice myvoice --silence-ms 600
+
+# Override the TTS model name
+uv run parseltongue speak run 12345678 --voice myvoice --model tts-1-en
+```
+
+Output:
+
+```
+data/stories/12345678/audio/
+    01/
+        0001.wav   0002.wav   ...   (per-chunk, used for resuming)
+    01.wav                          (stitched chapter audio)
+    02/  02.wav  ...
+```
+
+---
+
+## Setting up Qwen3-TTS locally
+
+Parseltongue runs the **Qwen3-TTS-12Hz-1.7B-Base** model directly in Python —
+no Docker, no server process.  The model is loaded once per session and kept
+in GPU memory while synthesis is running.
+
+| Model | Disk | VRAM | Notes |
+|---|---|---|---|
+| `Qwen3-TTS-12Hz-1.7B-Base` | ~3.5 GB | ≥8 GB | Voice cloning ← **this one** |
+| `Qwen3-TTS-12Hz-0.6B-Base` | ~1.2 GB | ≥4 GB | Lower quality; use for CPU or tight VRAM |
+
+### Prerequisites
+
+- Python **3.12** (recommended; 3.11 may work)
+- An NVIDIA GPU with **≥8 GB VRAM** and a matching CUDA toolkit
+- `conda` or a virtual environment manager
+
+### 1. Create a dedicated Python environment
+
+```bash
+conda create -n qwen3-tts python=3.12 -y
+conda activate qwen3-tts
+```
+
+### 2. Install PyTorch with CUDA
+
+Replace `cu128` with your installed CUDA version (`cu118`, `cu121`, `cu124`, etc.):
+
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/cu128
+```
+
+Verify GPU is visible:
+
+```bash
+python -c "import torch; print(torch.cuda.get_device_name(0))"
+```
+
+### 3. Install qwen-tts and Flash Attention
+
+```bash
+pip install qwen-tts
+
+# Flash Attention 2 — recommended (+10–15% speed on Ampere/Ada)
+pip install flash-attn --no-build-isolation
+```
+
+### 4. Install Parseltongue into the same environment
+
+The repo root is a uv workspace, so `pip install -e .` won't work directly.
+Install each package in dependency order instead:
+
+```bash
+cd ~/Projects/parseltongue
+
+pip install -e packages/logger
+pip install -e packages/scraper
+pip install -e packages/director
+pip install -e packages/tts
+pip install -e apps/cli
+```
+
+The model (~3.5 GB) is downloaded from HuggingFace automatically on first use.
+
+### 5. Configure .env
+
+```
+TTS_MODEL_ID=Qwen/Qwen3-TTS-12Hz-1.7B-Base
+TTS_DEVICE=cuda:0
+TTS_DTYPE=bfloat16
+```
+
+### Reference audio requirements
+
+For best voice cloning quality, the reference clip should:
+
+- Be **10–20 seconds** of continuous speech (3 s minimum)
+- Be **mono**, ≥24 kHz sample rate, WAV (16-bit), MP3, or M4A format
+- Have **no background noise**, music, or reverb
+- Contain **natural, expressive speech** — not rushed or whispered
+- Be accompanied by an accurate `--ref-text` transcript
+
+A quiet room recording on a decent microphone is sufficient.
+
+---
 
 ## Development
 

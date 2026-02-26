@@ -1,0 +1,24 @@
+[project]
+name = "parseltongue-tts"
+version = "0.1.0"
+description = "Phase 3: Text-to-speech synthesis using Qwen3-TTS (Python-native, no server)"
+requires-python = ">=3.11"
+dependencies = [
+    "qwen-tts",
+    "soundfile>=0.12.0",
+    "numpy>=1.24.0",
+    "parseltongue-logger",
+    "parseltongue-scraper",
+]
+
+# torch must be installed separately with the correct CUDA variant:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu128
+# qwen-tts pulls in a CPU torch as a fallback — replace it with the CUDA build.
+
+[tool.uv.sources]
+parseltongue-logger = { workspace = true }
+parseltongue-scraper = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
