@@ -212,7 +212,10 @@ Configuration via `.env` (see `.env.example`):
 
 | Variable | Default | Description |
 |---|---|---|
-| `TTS_SERVER_URL` | `http://localhost:8880` | Qwen3-TTS OpenAI-compatible server URL |
+| `TTS_MODEL_ID` | `Qwen/Qwen3-TTS-12Hz-1.7B-Base` | HuggingFace model ID |
+| `TTS_DEVICE` | `cuda:0` | PyTorch device |
+| `TTS_DTYPE` | `bfloat16` | Model dtype (`bfloat16`, `float16`, `float32`) |
+| `TTS_PROFILES_DIR` | `~/qwen3-tts/profiles` | Where voice profiles are stored |
 
 #### Step 1 — Register your voice (once)
 
@@ -258,9 +261,29 @@ uv run parseltongue speak run 12345678 --voice myvoice --overwrite
 # Adjust silence between chunks (default: 400 ms)
 uv run parseltongue speak run 12345678 --voice myvoice --silence-ms 600
 
-# Override the TTS model name
-uv run parseltongue speak run 12345678 --voice myvoice --model tts-1-en
+# Disable AI voice directions (use model's neutral style)
+uv run parseltongue speak run 12345678 --voice myvoice --no-instruct
 ```
+
+##### Re-doing individual chunks
+
+If a specific chunk sounds off you can re-synthesize it without touching the
+rest of the chapter.  Use `--chunk` (repeatable) to target one or more chunk
+indices:
+
+```bash
+# Redo chunk 7 of chapter 2
+uv run parseltongue speak run 12345678 --voice myvoice --chapter 2 --chunk 7
+
+# Redo multiple chunks
+uv run parseltongue speak run 12345678 --voice myvoice --chapter 2 --chunk 7 --chunk 12
+```
+
+The targeted chunks are always re-synthesized (regardless of `--overwrite`).
+After synthesis the chapter is **automatically re-stitched** if every expected
+chunk WAV is present on disk.  If some chunks are still missing (e.g. the
+original run was interrupted), a warning is printed and stitching is skipped
+until the chapter is complete.
 
 Output:
 

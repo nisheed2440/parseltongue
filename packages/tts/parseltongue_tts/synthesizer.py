@@ -35,6 +35,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
@@ -58,6 +59,8 @@ DEFAULT_DEVICE = "cuda:0"
 DEFAULT_DTYPE = "bfloat16"
 DEFAULT_PROFILES_DIR = Path.home() / "qwen3-tts" / "profiles"
 DEFAULT_SILENCE_MS = 400
+DEFAULT_CHUNK_RETRIES = 2
+DEFAULT_COOLDOWN_S = 300  # 5 minutes
 
 # ---------------------------------------------------------------------------
 # Module-level model + voice-prompt cache
@@ -258,6 +261,50 @@ def _synthesize_chunk(
 
 
 # ---------------------------------------------------------------------------
+# Retry helper
+# ---------------------------------------------------------------------------
+
+def _synthesize_chunk_with_retry(
+    text: str,
+    voice_name: str,
+    out_path: Path,
+    language: str | None,
+    instruct: str | None,
+    max_retries: int = DEFAULT_CHUNK_RETRIES,
+    cooldown_s: int = DEFAULT_COOLDOWN_S,
+    on_retry: Callable[[int, int, float, BaseException], None] | None = None,
+) -> None:
+    """Call ``_synthesize_chunk``, retrying up to *max_retries* times on error.
+
+    Between attempts the process sleeps for *cooldown_s* seconds to let the
+    GPU/CPU cool down and free resources.  If every attempt fails the last
+    exception is re-raised.
+
+    Args:
+        on_retry: Optional callback ``(attempt, max_retries, cooldown_s, exc)``
+                  invoked just before each sleep so callers can surface progress.
+    """
+    last_exc: BaseException | None = None
+    for attempt in range(1, max_retries + 2):  # attempts 1 … max_retries+1
+        try:
+            _synthesize_chunk(text, voice_name, out_path, language=language, instruct=instruct)
+            return
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            if attempt > max_retries:
+                break
+            log.warning(
+                "Chunk synthesis failed (attempt %d/%d): %s — cooling down for %d s before retry",
+                attempt, max_retries + 1, exc, cooldown_s,
+            )
+            if on_retry:
+                on_retry(attempt, max_retries, float(cooldown_s), exc)
+            time.sleep(cooldown_s)
+
+    raise last_exc  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
 # Chapter-level synthesis
 # ---------------------------------------------------------------------------
 
@@ -271,6 +318,10 @@ def synthesize_chapter(
     overwrite: bool = False,
     use_instruct: bool = True,
     on_chunk: ChunkCallback | None = None,
+    chunk_indices: list[int] | None = None,
+    max_retries: int = DEFAULT_CHUNK_RETRIES,
+    cooldown_s: int = DEFAULT_COOLDOWN_S,
+    on_retry: Callable[[int, int, float, BaseException], None] | None = None,
 ) -> str:
     """Synthesize all chunks of one directed chapter and stitch them together.
 
@@ -281,6 +332,12 @@ def synthesize_chapter(
 
     Already-rendered chunk WAVs are skipped unless ``overwrite=True``, making
     interrupted runs fully resumable.
+
+    When ``chunk_indices`` is provided, only those specific chunks are
+    (re-)synthesized — they are always overwritten regardless of the
+    ``overwrite`` flag.  After synthesis the stitcher runs only if every
+    expected chunk WAV is present on disk; otherwise a warning is logged and
+    the incomplete chapter is left un-stitched.
 
     Args:
         story_id:       Work ID (same as used by the scraper/director).
@@ -296,9 +353,19 @@ def synthesize_chapter(
                         and use the model's neutral default style.
         on_chunk:       Optional callback ``(chunk_index, total, text, instruct)`` called
                         after each chunk is synthesised.
+        chunk_indices:  If given, only (re-)synthesize these chunk indices.
+                        All other chunks are left untouched.  Stitching happens
+                        only when every chunk WAV is present.
+        max_retries:    How many additional attempts to make after a chunk
+                        synthesis error (default: 2).
+        cooldown_s:     Seconds to sleep between retry attempts (default: 300).
+        on_retry:       Optional callback ``(attempt, max_retries, cooldown_s, exc)``
+                        invoked before each sleep so callers can surface retry
+                        progress to the UI.
 
     Returns:
-        Path to the stitched chapter WAV file.
+        Path to the stitched chapter WAV file, or the chapter audio directory
+        when not all chunks are ready yet.
     """
     story_dir = Path(base_dir) / sanitize_id(story_id)
     directed_path = story_dir / "directed" / f"{chapter_index:02d}.json"
@@ -313,6 +380,8 @@ def synthesize_chapter(
     chapter_dir = story_dir / "audio" / f"{chapter_index:02d}"
     chapter_dir.mkdir(parents=True, exist_ok=True)
 
+    targeted = set(chunk_indices) if chunk_indices else None
+
     # Warm up the voice prompt before the loop so the first chunk isn't slow.
     _get_voice_prompt(voice_name)
 
@@ -326,7 +395,15 @@ def synthesize_chapter(
 
         instruct = chunk.get("instruct") if use_instruct else None
 
-        if chunk_path.exists() and not overwrite:
+        # When targeting specific chunks: synthesize only those, always overwrite.
+        # When not targeting: apply the normal overwrite logic.
+        if targeted is not None:
+            if idx not in targeted:
+                log.debug("Chunk %04d not in target set – skipping", idx)
+                if on_chunk:
+                    on_chunk(idx, total, text, instruct)
+                continue
+        elif chunk_path.exists() and not overwrite:
             log.debug("Chunk %04d already exists – skipping", idx)
             if on_chunk:
                 on_chunk(idx, total, text, instruct)
@@ -337,12 +414,32 @@ def synthesize_chapter(
             idx, total, len(text.split()),
             f" [instruct: {instruct[:60]}…]" if instruct else "",
         )
-        _synthesize_chunk(text, voice_name, chunk_path, language=language, instruct=instruct)
+        _synthesize_chunk_with_retry(
+            text, voice_name, chunk_path,
+            language=language, instruct=instruct,
+            max_retries=max_retries, cooldown_s=cooldown_s,
+            on_retry=on_retry,
+        )
 
         if on_chunk:
             on_chunk(idx, total, text, instruct)
 
     out_path = story_dir / "audio" / f"{chapter_index:02d}.wav"
+
+    # When targeting specific chunks, only stitch if every chunk WAV exists.
+    if targeted is not None:
+        missing = [p for p in chunk_paths if not p.exists()]
+        if missing:
+            log.warning(
+                "Chapter %02d: %d chunk(s) still missing — skipping stitch: %s",
+                chapter_index,
+                len(missing),
+                ", ".join(p.name for p in missing),
+            )
+            return str(chapter_dir)
+
+        log.info("All %d chunks present — re-stitching chapter %02d", total, chapter_index)
+
     stitch_wav_files(chunk_paths, out_path, silence_ms=silence_ms)
     log.info("Chapter %02d → %d chunks → %s", chapter_index, total, out_path)
     return str(out_path)

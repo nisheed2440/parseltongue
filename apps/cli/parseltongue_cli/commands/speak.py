@@ -132,6 +132,18 @@ def run_cmd(
         int,
         typer.Option("--silence-ms", help="Silence between chunks in milliseconds"),
     ] = 400,
+    chunk: Annotated[
+        list[int] | None,
+        typer.Option("--chunk", help="Re-synthesise only these chunk indices (repeatable); stitches when all chunks are ready"),
+    ] = None,
+    max_retries: Annotated[
+        int,
+        typer.Option("--max-retries", help="Max retry attempts per chunk after a synthesis error (default: 2)"),
+    ] = 2,
+    retry_cooldown: Annotated[
+        int,
+        typer.Option("--retry-cooldown", help="Seconds to wait between retry attempts (default: 300)"),
+    ] = 300,
     overwrite: Annotated[
         bool,
         typer.Option("--overwrite", help="Re-synthesise chunks that already have audio files"),
@@ -239,7 +251,7 @@ def run_cmd(
             directed_path = directed_root / f"{ch_idx:02d}.json"
             stitched_path = chapter_audio_path(story_dir, ch_idx)
 
-            if stitched_path.exists() and not overwrite:
+            if stitched_path.exists() and not overwrite and not chunk:
                 console.print(
                     f"  [dim]Chapter {ch_idx:02d} already synthesised — skipping[/dim]"
                 )
@@ -251,6 +263,13 @@ def run_cmd(
                 key=lambda c: c["chunk_index"],
             )
             total_chunks = len(chunks)
+
+            if chunk:
+                console.print(
+                    f"  [dim]Chapter {ch_idx:02d} — redoing chunk(s): "
+                    + ", ".join(str(c) for c in sorted(chunk))
+                    + "[/dim]"
+                )
 
             progress = Progress(
                 TextColumn("[progress.description]{task.description}"),
@@ -278,6 +297,18 @@ def run_cmd(
                         progress.update(tid, completed=chunk_idx, total=total)
                     return cb
 
+                def make_retry_callback(tid):
+                    def on_retry(attempt: int, max_att: int, cooldown: float, exc: BaseException) -> None:
+                        mins = int(cooldown) // 60
+                        secs = int(cooldown) % 60
+                        duration = f"{mins}m {secs}s" if mins else f"{secs}s"
+                        progress.console.print(
+                            f"\n  [bold yellow]⚠ Chunk failed (attempt {attempt}/{max_att + 1}):[/bold yellow] "
+                            f"[dim]{exc}[/dim]\n"
+                            f"  [dim]Cooling down for {duration} before retry…[/dim]\n"
+                        )
+                    return on_retry
+
                 try:
                     out = synthesize_chapter(
                         story_id=story_id,
@@ -289,6 +320,10 @@ def run_cmd(
                         overwrite=overwrite,
                         use_instruct=use_instruct,
                         on_chunk=make_callback(task_id),
+                        chunk_indices=chunk if chunk else None,
+                        max_retries=max_retries,
+                        cooldown_s=retry_cooldown,
+                        on_retry=make_retry_callback(task_id),
                     )
                     chapter_results[ch_idx] = out
                 except Exception as exc:
@@ -298,8 +333,11 @@ def run_cmd(
                     raise typer.Exit(1)
 
         for idx, path in sorted(chapter_results.items()):
+            is_wav = path.endswith(".wav") and not path.endswith(f"{idx:02d}/")
+            status = "[bold green]✓[/bold green]" if is_wav else "[bold yellow]~[/bold yellow]"
+            note = "" if is_wav else "  [yellow](not all chunks ready — skipped stitch)[/yellow]"
             console.print(
-                f"  [bold green]✓[/bold green] Chapter [bold]{idx:02d}[/bold] → [dim]{path}[/dim]"
+                f"  {status} Chapter [bold]{idx:02d}[/bold] → [dim]{path}[/dim]{note}"
             )
         console.print()
 
