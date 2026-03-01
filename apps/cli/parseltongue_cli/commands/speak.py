@@ -114,8 +114,8 @@ def run_cmd(
     ],
     voice: Annotated[
         str,
-        typer.Option("--voice", "-v", help="Voice profile name (must be registered first)"),
-    ] = "narrator",
+        typer.Option("--voice", "-v", help="Voice profile name or built-in speaker (default: ryan)"),
+    ] = "ryan",
     chapter: Annotated[
         list[int] | None,
         typer.Option("--chapter", help="Process only these chapter numbers (repeatable)"),
@@ -188,7 +188,8 @@ def run_cmd(
     Per-chunk WAVs: data/stories/<id>/audio/<NN>/<chunk_index:04d>.wav
     Stitched chapter: data/stories/<id>/audio/<NN>.wav
     """
-    from parseltongue_tts import register_voice, synthesize_chapter, chapter_audio_path
+    from parseltongue_tts import register_voice, synthesize_chapter, chapter_audio_path, unload_other_models
+    from parseltongue_tts.synthesizer import _is_builtin_speaker
     from parseltongue_scraper.repository import sanitize_id
     import json
 
@@ -196,8 +197,9 @@ def run_cmd(
     stories_dir = os.path.abspath(output) if output else str(root / "data" / "stories")
     setup_logging(root / "logs")
 
-    model_id = os.environ.get("TTS_MODEL_ID", "Qwen/Qwen3-TTS-12Hz-1.7B-Base")
     device = os.environ.get("TTS_DEVICE", "cuda:0")
+
+    unload_other_models()
 
     if ref_audio is not None:
         console.print(Rule(f"[bold cyan]Registering voice  ·  {voice}[/bold cyan]"))
@@ -222,7 +224,13 @@ def run_cmd(
         console.print(
             Rule(f"[bold cyan]Story {i}/{total_stories}  ·  work {story_id}[/bold cyan]")
         )
-        console.print(f"[dim]Voice:[/dim]    {voice}")
+        if _is_builtin_speaker(voice):
+            model_id = os.environ.get("TTS_CUSTOM_VOICE_MODEL_ID", "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice")
+            voice_label = f"{voice} [dim italic](built-in speaker)[/dim italic]"
+        else:
+            model_id = os.environ.get("TTS_MODEL_ID", "Qwen/Qwen3-TTS-12Hz-1.7B-Base")
+            voice_label = voice
+        console.print(f"[dim]Voice:[/dim]    {voice_label}")
         console.print(f"[dim]Model:[/dim]    {model_id}  on  {device}")
         console.print(f"[dim]Instruct:[/dim] {'on' if use_instruct else 'off'}\n")
 

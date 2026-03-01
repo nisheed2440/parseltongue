@@ -2,7 +2,7 @@
 
 Fan fiction pipeline: **scrape → enunciate → speak → consume**
 
-Turn AO3 stories into audio books — scrape chapters to Markdown, add AI voice direction via Qwen3 8b on Ollama, synthesize with Qwen3-TTS voice cloning, and browse through a web app.
+Turn AO3 stories into audio books — scrape chapters to Markdown, add AI voice direction via Qwen3 8b on Ollama, synthesize with Qwen3-TTS (built-in speakers or voice cloning), and browse through a web app.
 
 ## Roadmap
 
@@ -200,9 +200,13 @@ uv run parseltongue direct --simple --max-words 150 --chapter 1 12345678
 
 ### CLI — speak
 
-The `speak` command synthesises directed chapters into audio using Qwen3-TTS in
-voice clone mode. It requires a running Qwen3-TTS server (see
-[Setting up Qwen3-TTS locally](#setting-up-qwen3-tts-locally)).
+The `speak` command synthesises directed chapters into audio using Qwen3-TTS.
+It supports two modes that are selected automatically:
+
+| Mode | When | Model used |
+|------|------|------------|
+| **Built-in speaker** | `--voice` is a named speaker with no registered profile (default: `ryan`) | `Qwen3-TTS-12Hz-1.7B-CustomVoice` |
+| **Voice clone** | `--voice` matches a profile registered with `register-voice` | `Qwen3-TTS-12Hz-1.7B-Base` |
 
 Each chunk is rendered individually and saved as a WAV file. Interrupted runs
 are resumable — already-rendered chunks are skipped. When all chunks for a
@@ -212,12 +216,29 @@ Configuration via `.env` (see `.env.example`):
 
 | Variable | Default | Description |
 |---|---|---|
-| `TTS_MODEL_ID` | `Qwen/Qwen3-TTS-12Hz-1.7B-Base` | HuggingFace model ID |
+| `TTS_CUSTOM_VOICE_MODEL_ID` | `Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice` | Model used for built-in speakers |
+| `TTS_MODEL_ID` | `Qwen/Qwen3-TTS-12Hz-1.7B-Base` | Model used for voice cloning |
 | `TTS_DEVICE` | `cuda:0` | PyTorch device |
 | `TTS_DTYPE` | `bfloat16` | Model dtype (`bfloat16`, `float16`, `float32`) |
-| `TTS_PROFILES_DIR` | `~/qwen3-tts/profiles` | Where voice profiles are stored |
+| `TTS_PROFILES_DIR` | `~/qwen3-tts/profiles` | Where voice clone profiles are stored |
 
-#### Step 1 — Register your voice (once)
+#### Option A — Built-in speakers (no setup needed)
+
+The `CustomVoice` model ships with ready-to-use speakers. Just run:
+
+```bash
+# Uses the default built-in speaker (ryan) — no registration needed
+uv run parseltongue speak run 12345678
+
+# Choose a different built-in speaker
+uv run parseltongue speak run 12345678 --voice vivian
+uv run parseltongue speak run 12345678 --voice aiden
+```
+
+Available speakers: `ryan`, `vivian`, `aiden` (call
+`model.get_supported_speakers()` for the full list).
+
+#### Option B — Voice cloning (register a custom voice first)
 
 Record 10–20 seconds of yourself reading clearly with no background noise. Save
 it as a WAV, MP3, or M4A file. Then register it as a named profile:
@@ -228,9 +249,8 @@ uv run parseltongue speak register-voice myvoice \
     --ref-text "Exact words you spoke in the recording."
 ```
 
-The profile is written to `~/qwen3-tts/voice_library/profiles/myvoice/` where
-the TTS server looks for it. You only need to do this once per voice; re-run
-with `--overwrite` to replace it.
+The profile is saved to `~/qwen3-tts/profiles/myvoice/`. You only need to do
+this once per voice; re-run with `--overwrite` to replace it.
 
 ```bash
 # Options
@@ -241,28 +261,32 @@ uv run parseltongue speak register-voice myvoice \
     --overwrite                   # replace existing profile
 ```
 
-#### Step 2 — Synthesise
+Once registered, use it by name — the synthesizer detects the profile on disk
+and automatically switches to the `Base` (voice clone) model:
 
 ```bash
-# Synthesise all directed chapters of a story
 uv run parseltongue speak run 12345678 --voice myvoice
+```
 
+#### Common options
+
+```bash
 # Only specific chapters
-uv run parseltongue speak run 12345678 --voice myvoice --chapter 1 --chapter 2
+uv run parseltongue speak run 12345678 --chapter 1 --chapter 2
 
-# Register voice and synthesise in one step
+# Register a clone voice and synthesise in one step
 uv run parseltongue speak run 12345678 --voice myvoice \
     --ref-audio myvoice.wav \
     --ref-text "Exact transcript."
 
 # Re-synthesise everything from scratch
-uv run parseltongue speak run 12345678 --voice myvoice --overwrite
+uv run parseltongue speak run 12345678 --overwrite
 
 # Adjust silence between chunks (default: 400 ms)
-uv run parseltongue speak run 12345678 --voice myvoice --silence-ms 600
+uv run parseltongue speak run 12345678 --silence-ms 600
 
 # Disable AI voice directions (use model's neutral style)
-uv run parseltongue speak run 12345678 --voice myvoice --no-instruct
+uv run parseltongue speak run 12345678 --no-instruct
 ```
 
 ##### Re-doing individual chunks
@@ -299,14 +323,18 @@ data/stories/12345678/audio/
 
 ## Setting up Qwen3-TTS locally
 
-Parseltongue runs the **Qwen3-TTS-12Hz-1.7B-Base** model directly in Python —
-no Docker, no server process.  The model is loaded once per session and kept
-in GPU memory while synthesis is running.
+Parseltongue runs Qwen3-TTS models directly in Python — no Docker, no server
+process.  The model is loaded once per session and kept in GPU memory while
+synthesis is running.  Which model is loaded depends on the synthesis mode:
 
-| Model | Disk | VRAM | Notes |
+| Model | Disk | VRAM | Used for |
 |---|---|---|---|
-| `Qwen3-TTS-12Hz-1.7B-Base` | ~3.5 GB | ≥8 GB | Voice cloning ← **this one** |
-| `Qwen3-TTS-12Hz-0.6B-Base` | ~1.2 GB | ≥4 GB | Lower quality; use for CPU or tight VRAM |
+| `Qwen3-TTS-12Hz-1.7B-CustomVoice` | ~3.5 GB | ≥8 GB | Built-in speakers (`ryan`, `vivian`, …) ← **default** |
+| `Qwen3-TTS-12Hz-1.7B-Base` | ~3.5 GB | ≥8 GB | Voice cloning (registered profiles) |
+| `Qwen3-TTS-12Hz-0.6B-CustomVoice` | ~1.2 GB | ≥4 GB | Built-in speakers on tight VRAM |
+| `Qwen3-TTS-12Hz-0.6B-Base` | ~1.2 GB | ≥4 GB | Voice cloning on tight VRAM |
+
+Both models are downloaded automatically from HuggingFace on first use.
 
 ### Prerequisites
 
@@ -359,19 +387,23 @@ pip install -e packages/tts
 pip install -e apps/cli
 ```
 
-The model (~3.5 GB) is downloaded from HuggingFace automatically on first use.
-
 ### 5. Configure .env
 
 ```
+# Built-in speaker model (used when --voice has no registered profile)
+TTS_CUSTOM_VOICE_MODEL_ID=Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
+
+# Voice clone model (used when --voice matches a registered profile)
 TTS_MODEL_ID=Qwen/Qwen3-TTS-12Hz-1.7B-Base
+
 TTS_DEVICE=cuda:0
 TTS_DTYPE=bfloat16
 ```
 
-### Reference audio requirements
+### Reference audio requirements (voice cloning only)
 
-For best voice cloning quality, the reference clip should:
+Only needed if you register a custom voice profile with `register-voice`.
+For best clone quality the reference clip should:
 
 - Be **10–20 seconds** of continuous speech (3 s minimum)
 - Be **mono**, ≥24 kHz sample rate, WAV (16-bit), MP3, or M4A format

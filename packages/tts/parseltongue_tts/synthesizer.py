@@ -36,6 +36,8 @@ import json
 import os
 import shutil
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
@@ -55,6 +57,7 @@ ChunkCallback = Callable[[int, int, str, "str | None"], None]
 log = get_logger(__name__)
 
 DEFAULT_MODEL_ID = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
+DEFAULT_CUSTOM_VOICE_MODEL_ID = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
 DEFAULT_DEVICE = "cuda:0"
 DEFAULT_DTYPE = "bfloat16"
 DEFAULT_PROFILES_DIR = Path.home() / "qwen3-tts" / "profiles"
@@ -67,7 +70,51 @@ DEFAULT_COOLDOWN_S = 300  # 5 minutes
 # ---------------------------------------------------------------------------
 
 _model: "Qwen3TTSModel | None" = None
+_custom_voice_model: "Qwen3TTSModel | None" = None
 _voice_prompts: dict[str, list] = {}  # voice_name -> prompt_items
+
+
+def unload_other_models() -> None:
+    """Evict any non-TTS models from GPU memory before synthesis begins.
+
+    Currently handles Ollama: queries ``/api/ps`` and sends ``keep_alive: 0``
+    for every model Ollama is holding in VRAM.  Fails silently when Ollama is
+    not running or unreachable — it is a best-effort VRAM reclaim, not a
+    hard requirement.
+
+    Call this once at the start of a synthesis session, before any TTS model
+    or voice-profile loading takes place.
+    """
+    host = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+
+    try:
+        with urllib.request.urlopen(f"{host}/api/ps", timeout=3) as resp:
+            data = json.loads(resp.read())
+    except Exception:
+        return  # Ollama not running — nothing to unload
+
+    running: list[dict] = data.get("models", [])
+    if not running:
+        return
+
+    log.info("Unloading %d Ollama model(s) from VRAM before TTS…", len(running))
+    for entry in running:
+        model_name = entry.get("name") or entry.get("model", "")
+        if not model_name:
+            continue
+        payload = json.dumps({"model": model_name, "keep_alive": 0}).encode()
+        req = urllib.request.Request(
+            f"{host}/api/generate",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10):
+                pass
+            log.info("Unloaded Ollama model: %s", model_name)
+        except Exception as exc:
+            log.warning("Could not unload Ollama model '%s': %s", model_name, exc)
 
 
 def get_model() -> "Qwen3TTSModel":
@@ -107,6 +154,44 @@ def get_model() -> "Qwen3TTSModel":
     return _model
 
 
+def get_custom_voice_model() -> "Qwen3TTSModel":
+    """Lazy-load the CustomVoice TTS model (once per process).
+
+    Reads TTS_CUSTOM_VOICE_MODEL_ID, TTS_DEVICE, TTS_DTYPE from the environment.
+    Used for built-in speakers (e.g. ``ryan``, ``vivian``) that do not require a
+    registered voice profile.
+    """
+    global _custom_voice_model
+    if _custom_voice_model is not None:
+        return _custom_voice_model
+
+    import torch
+    from qwen_tts import Qwen3TTSModel
+
+    model_id = os.environ.get("TTS_CUSTOM_VOICE_MODEL_ID", DEFAULT_CUSTOM_VOICE_MODEL_ID)
+    device = os.environ.get("TTS_DEVICE", DEFAULT_DEVICE)
+    dtype_str = os.environ.get("TTS_DTYPE", DEFAULT_DTYPE).lower()
+    dtype = {"bfloat16": torch.bfloat16, "bf16": torch.bfloat16,
+             "float16": torch.float16, "fp16": torch.float16,
+             "float32": torch.float32, "fp32": torch.float32}.get(dtype_str, torch.bfloat16)
+
+    try:
+        import flash_attn  # noqa: F401
+        attn_impl = "flash_attention_2"
+    except ImportError:
+        attn_impl = "sdpa"
+
+    log.info("Loading CustomVoice TTS model %s on %s (%s)…", model_id, device, dtype_str)
+    _custom_voice_model = Qwen3TTSModel.from_pretrained(
+        model_id,
+        device_map=device,
+        dtype=dtype,
+        attn_implementation=attn_impl,
+    )
+    log.info("CustomVoice TTS model ready.")
+    return _custom_voice_model
+
+
 # ---------------------------------------------------------------------------
 # Voice profile helpers
 # ---------------------------------------------------------------------------
@@ -144,6 +229,17 @@ def _get_voice_prompt(voice_name: str) -> tuple[list, str]:
         items, language = _load_prompt_from_disk(voice_name)
         _voice_prompts[voice_name] = (items, language)
     return _voice_prompts[voice_name]
+
+
+def _is_builtin_speaker(voice_name: str) -> bool:
+    """Return True when *voice_name* has no registered profile on disk.
+
+    Built-in speakers (e.g. ``ryan``, ``vivian``) are synthesized via the
+    CustomVoice model using ``generate_custom_voice``.  Registered profiles
+    (created with ``register_voice``) use the Base model via
+    ``generate_voice_clone``.
+    """
+    return not (_profile_dir(voice_name) / "prompt.pt").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -235,25 +331,39 @@ def _synthesize_chunk(
 ) -> None:
     """Synthesize one text chunk and write it as a WAV file.
 
-    If *instruct* is provided it is forwarded to ``generate_voice_clone`` as a
-    speaking-style directive (e.g. ``"Emotion: nostalgic, Pacing: measured"``).
-    The 1.7B-Base model supports this; leaving it ``None`` uses the model's
-    default neutral style.
-    """
-    prompt_items, default_language = _get_voice_prompt(voice_name)
-    resolved_language = language or default_language
+    Automatically selects the synthesis path based on whether *voice_name*
+    matches a registered profile on disk:
 
-    model = get_model()
+    * **Registered profile** (``prompt.pt`` exists): uses the Base model via
+      ``generate_voice_clone``.
+    * **Built-in speaker** (no profile): uses the CustomVoice model via
+      ``generate_custom_voice`` (e.g. ``ryan``, ``vivian``).
+
+    If *instruct* is provided it is forwarded as a speaking-style directive.
+    """
+    resolved_language = language or "English"
     kwargs: dict = {}
     if instruct:
         kwargs["instruct"] = instruct
 
-    wavs, sr = model.generate_voice_clone(
-        text=text,
-        language=resolved_language,
-        voice_clone_prompt=prompt_items,
-        **kwargs,
-    )
+    if _is_builtin_speaker(voice_name):
+        model = get_custom_voice_model()
+        wavs, sr = model.generate_custom_voice(
+            text=text,
+            language=resolved_language,
+            speaker=voice_name,
+            **kwargs,
+        )
+    else:
+        prompt_items, default_language = _get_voice_prompt(voice_name)
+        resolved_language = language or default_language
+        model = get_model()
+        wavs, sr = model.generate_voice_clone(
+            text=text,
+            language=resolved_language,
+            voice_clone_prompt=prompt_items,
+            **kwargs,
+        )
 
     audio: np.ndarray = np.asarray(wavs[0], dtype=np.float32)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -382,8 +492,11 @@ def synthesize_chapter(
 
     targeted = set(chunk_indices) if chunk_indices else None
 
-    # Warm up the voice prompt before the loop so the first chunk isn't slow.
-    _get_voice_prompt(voice_name)
+    # Warm up the model before the loop so the first chunk isn't slow.
+    if _is_builtin_speaker(voice_name):
+        get_custom_voice_model()
+    else:
+        _get_voice_prompt(voice_name)
 
     chunk_paths: list[Path] = []
 

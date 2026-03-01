@@ -5,6 +5,7 @@ from .synthesizer import (
     has_chapter_audio,
     audio_dir,
     chapter_audio_path,
+    unload_other_models,
 )
 
 __all__ = [
@@ -14,4 +15,5 @@ __all__ = [
     "has_chapter_audio",
     "audio_dir",
     "chapter_audio_path",
+    "unload_other_models",
 ]
