@@ -53,6 +53,18 @@ def direct(
         int,
         typer.Option("--max-words", help="Maximum words per passage chunk (default: 200)"),
     ] = 200,
+    context_window: Annotated[
+        int,
+        typer.Option(
+            "--context-window",
+            help=(
+                "Number of preceding directed chunks passed to the model as conversation "
+                "history so it can maintain emotional continuity across chunk boundaries. "
+                "Higher values = more context, but slower and higher token usage. "
+                "Set to 0 to disable (default: 3)."
+            ),
+        ),
+    ] = 3,
     simple: Annotated[
         bool,
         typer.Option("--simple", help="Chunk only — no AI direction, outputs chunk_index + text"),
@@ -199,6 +211,7 @@ def direct(
                         model=resolved_model,
                         max_words=max_words,
                         on_chunk=make_callback(ch_idx),
+                        context_window=context_window,
                     )
 
                     with open(out_path, "w", encoding="utf-8") as fh:

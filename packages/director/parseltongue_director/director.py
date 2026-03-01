@@ -262,21 +262,38 @@ def chunk_work(
 
     return results
 
-def direct_chunk(chunk_text: str, model: str | None = None) -> str:
+def direct_chunk(
+    chunk_text: str,
+    model: str | None = None,
+    prev_chunks: list[dict] | None = None,
+) -> str:
     """Ask the model for a direction instruction for *chunk_text*.
 
     The model is only asked to produce an ``instruct`` string — it never
     touches the passage text, eliminating any risk of rewriting.
+
+    Args:
+        chunk_text:  The passage to direct.
+        model:       Ollama model tag to use.
+        prev_chunks: Optional list of already-directed preceding chunks, each a
+                     dict with ``"text"`` and ``"instruct"`` keys.  They are
+                     replayed as conversation history so the model can maintain
+                     emotional continuity across chunk boundaries.
     """
     resolved_model = model or _default_model()
     client = _client()
 
+    messages: list[dict] = [{"role": "system", "content": DIRECTION_PROMPT}]
+
+    for ctx in (prev_chunks or []):
+        messages.append({"role": "user", "content": ctx["text"]})
+        messages.append({"role": "assistant", "content": json.dumps({"instruct": ctx["instruct"]})})
+
+    messages.append({"role": "user", "content": chunk_text})
+
     response = client.chat(
         model=resolved_model,
-        messages=[
-            {"role": "system", "content": DIRECTION_PROMPT},
-            {"role": "user", "content": chunk_text},
-        ],
+        messages=messages,
         options={"temperature": 0.3},
     )
 
@@ -285,6 +302,8 @@ def direct_chunk(chunk_text: str, model: str | None = None) -> str:
 
 _TITLE_INSTRUCT = "Announce the chapter title clearly, steady and measured pace, slight pause after."
 
+DEFAULT_CONTEXT_WINDOW = 3
+
 
 def direct_chapter(
     chapter_text: str,
@@ -292,6 +311,7 @@ def direct_chapter(
     max_words: int = DEFAULT_MAX_WORDS,
     chapter_index: int | None = None,
     on_chunk: "ChunkCallback | None" = None,
+    context_window: int = DEFAULT_CONTEXT_WINDOW,
 ) -> list[dict]:
     """Chunk *chapter_text* and direct each chunk.
 
@@ -305,12 +325,18 @@ def direct_chapter(
 
     *on_chunk* is called after each chunk with ``(index, total, text, instruct)``.
 
+    Args:
+        context_window: Number of preceding directed chunks to pass as
+                        conversation history so the model can maintain
+                        emotional continuity.  Set to ``0`` to disable.
+
     Returns a list of dicts with keys: ``chunk_index``, ``text``, ``instruct``.
     """
     resolved_model = model or _default_model()
     chunks = split_into_chunks(chapter_text, max_words=max_words, chapter_index=chapter_index)
     log.debug(
-        "Chapter split into %d chunks (max %d words each)", len(chunks), max_words
+        "Chapter split into %d chunks (max %d words each, context_window=%d)",
+        len(chunks), max_words, context_window,
     )
 
     results: list[dict] = []
@@ -320,7 +346,8 @@ def direct_chapter(
             instruct = _TITLE_INSTRUCT
         else:
             log.debug("Directing chunk %d/%d (%d words)", i, len(chunks), len(chunk.split()))
-            instruct = direct_chunk(chunk, model=resolved_model)
+            prev = results[-context_window:] if context_window > 0 else None
+            instruct = direct_chunk(chunk, model=resolved_model, prev_chunks=prev)
         results.append({"chunk_index": i, "text": chunk, "instruct": instruct})
         if on_chunk:
             on_chunk(i, len(chunks), chunk, instruct)
@@ -336,16 +363,20 @@ def direct_work(
     overwrite: bool = False,
     max_words: int = DEFAULT_MAX_WORDS,
     on_chunk: "ChunkCallback | None" = None,
+    context_window: int = DEFAULT_CONTEXT_WINDOW,
 ) -> dict[int, str]:
     """Direct all (or selected) chapters of a work.
 
     Args:
-        story_id:  The work ID used by the scraper.
-        base_dir:  Root data directory (contains ``<story_id>/``).
-        model:     Ollama model tag to use.
-        chapters:  If given, only process these 1-based chapter indices.
-        overwrite: Re-process chapters that already have a directed JSON.
-        max_words: Maximum words per passage chunk (default 200).
+        story_id:       The work ID used by the scraper.
+        base_dir:       Root data directory (contains ``<story_id>/``).
+        model:          Ollama model tag to use.
+        chapters:       If given, only process these 1-based chapter indices.
+        overwrite:      Re-process chapters that already have a directed JSON.
+        max_words:      Maximum words per passage chunk (default 200).
+        context_window: Number of preceding directed chunks passed as
+                        conversation history to maintain emotional continuity
+                        across chunk boundaries (default 3, set to 0 to disable).
 
     Returns:
         Mapping of chapter_index → path of the written JSON file.
@@ -384,6 +415,7 @@ def direct_work(
             max_words=max_words,
             chapter_index=idx,
             on_chunk=on_chunk,
+            context_window=context_window,
         )
 
         with open(out_path, "w", encoding="utf-8") as fh:
